@@ -753,10 +753,17 @@ assert(typeof np.resolvePlainHttpUrl === 'undefined' && typeof np.cachedPlainHtt
   assert(probeFn.indexOf('url: probeUrl') >= 0, 'probe 请求的是 probeUrl（中转端点）而非候选原文');
 }
 
-// probe：没配中转时必须返回 null（不改变原有直连行为）
-const probeNoRelay = await np.probeCandidatesViaRelay(['https://aweme.snssdk.com/aweme/v1/play/?video_id=x']);
-assert(probeNoRelay === null, '未配中转时 probe 返回 null（不改原有行为）');
-assert((await np.probeCandidatesViaRelay([])) === null, '空候选返回 null');
+// probe：**这些断言必须是环境无关的**，否则又会变成"随环境飘"的测试
+// （本文件开头约定：依赖网络可用性的东西一律 NOTE，不 FAIL）。
+// 所以只断言**纯逻辑**：没配中转 / 空候选 / 探测异常时都要返回 null（不改原有行为）。
+// 不在测试里打真实 probe 端点 —— 那会让 PASS 数随"中转是否在跑"而变。
+assert(await np.probeCandidatesViaRelay(['https://aweme.snssdk.com/aweme/v1/play/?video_id=x']) === null,
+  '未配中转时 probe 返回 null（不改原有行为）');
+assert(await np.probeCandidatesViaRelay([]) === null, '空候选返回 null');
+assert(await np.probeCandidatesViaRelay(null) === null, 'null 候选返回 null');
+// 显式传一个打不通的 relay：必须**吞掉异常返回 null**，绝不能把播放流程带崩
+assert(await np.probeCandidatesViaRelay(['https://x/y'], { relay: 'http://127.0.0.1:1/', timeoutMs: 800 }) === null,
+  '探测失败时返回 null（不拦播放器）');
 // probe 的 URL 组装：必须是 /relay?url=<encode>&probe=1，而不是直接把视频地址发出去
 {
   const npSrc = fs.readFileSync(path.join(root, 'src', 'services', 'native-player.js'), 'utf8');
