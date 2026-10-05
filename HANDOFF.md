@@ -204,15 +204,15 @@ npm run relay      # PC 中转（LAN 模式，已支持 Range 透传 + &meta=1 �
 | `src/services/douyin-auth.js` | 扫码登录 + 手机号登录（send_code / sms_login） |
 | `src/services/douyin-api.js` | 热榜、热搜词、分享页解析、`fetchItemInfo`（登录态批量接口） |
 | `src/services/video.js` | 信息流组装、按需解析、导入视频持久化、`resolveVideoForItem` |
-| `src/services/native-player.js` | 原生播放桥 + `nativePlayableUrl` |
-| `src/services/chat-api.js` | 多闪（抖音私信）PC 网关传输层：地址规范化/持久化 + `/api/*` 封装（Promise，复用 `jsapiHttpRequest`） |
+| `src/services/native-player.js` | 原生播放桥 + `playUrlCandidates`（多候选轮换）+ `probeCandidatesViaRelay`（中转可达性探测） |
+| `src/services/chat-api.js` | 多闪（抖音私信）PC 网关传输层：地址规范化/持久化 + `/api/*` 封装。**登录页已删，本模块暂无调用方**（保留，测试全在） |
 | `src/services/toutiao-api.js` | 今日头条数据层：热榜 / 信息流分页 / **正文抽取（RENDER_DATA）** / 评论（本地）/ 独立 storage key |
 | `src/pages/toutiao/toutiao.vue` | **今日头条页**（横屏 800×254）：观看（读正文）/点赞/我的/历史 + 二维码登录 + 评论 |
 | `src/services/fanqie-api.js` | 番茄小说数据层：书单 `/api/rank/list` / 章节表 `/page/<id>` / 正文 `/reader/<id>` / PUA 掩码 / 本地书架·进度·历史 |
 | `src/pages/fanqie/fanqie.vue` | **番茄小说页**（横屏 800×254）：书架 / 336 章目录 / 阅读（上下章）/ 我的 + 二维码登录 |
-| `src/pages/index/index.vue` | **主主页 / 启动页**（launcher）：三个入口卡片「笔上抖音」「今日头条」「番茄小说」+ 各边登录态 + 多闪登录/观看历史入口 |
-| `src/pages/douyin/douyin.vue` | 原抖音主页（**从 index 整体迁来**）：左侧分区栏 + 信息流/搜索/发布/消息/我的 + 原生播放 |
-| `src/pages/chat-login/chat-login.vue` | **多闪扫码登录页**（横屏 800×254，与原抖音扫码弹层并存）：网关检测 + 二维码 + 应用内数字键盘改地址 |
+| `src/pages/index/index.vue` | **主主页 / 启动页**（launcher）：三个入口卡片「笔上抖音」「今日头条」「番茄小说」+ 各边登录态 + 观看历史入口 |
+| `src/assets/icons.js` | 抖音风 PNG 图标（22 个，内联 data URI，自动生成见 §15.13） |
+| `src/pages/douyin/douyin.vue` | 抖音主页：左侧分区栏（带图标）+ 信息流/搜索/发布/消息/我的 + 右侧抖音风互动栏 + **诊断日志面板** + 原生播放 |
 | `src/pages/player/player.vue` | 横屏播放页（原生画面 + 控制栏 + 断点续播） |
 | `src/components/PinyinIme.vue` | 六模式输入法（九键中文/全拼/英文/数字/符号/应用内剪贴板） |
 | `libs/libjsapi_better_video.so` | 原生播放模块（armv7-glibc） |
@@ -366,10 +366,10 @@ C:\Users\zhoum\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.
 
 ### 12.8 模拟器横屏预览的正确姿势（踩过坑，别再试错）
 
-想在模拟器里看某个**非首页**的页面（例如 `chat-login`）：
+想在模拟器里看某个**非首页**的页面（例如 `fanqie`）：
 
 - 改 `src/app.json` 的 pages 顺序**没用** —— 启动页不是按 app.json 顺序定的，实测仍 `launchPage(index)`。
-- ✅ 正确做法：改 **`package.json` 里的 `simulator.page`**（默认 `""`），填页面名如 `"chat-login"`，CLI 会把它传给 appx。
+- ✅ 正确做法：改 **`package.json` 里的 `simulator.page`**（默认 `""`），填页面名如 `"fanqie"`，CLI 会把它传给 appx。
   验证完记得还原成 `""`。
 - 模拟器 `resources/cfg.json` 的 `screen` 要改成 **800×254** 才是横屏（验证完还原成 254×800）。
 - 截屏后**别移动鼠标/别让别的窗口抢焦点**：模拟器有左滑返回手势，鼠标一动就把你刚进的页 pop 掉了
@@ -906,14 +906,15 @@ screen=800x254(cfg 254x800 dir270) | play ok ?x? rate=1 vol=70
 
 ### 12.9 主主页 / 启动页（2026-10-04）
 
-**结构现状**
+**结构现状**（截至 2026-10，**下文 §12.8 那个"待做/多闪"是当时的状态，以此处为准**）
 
 ```
 pages/index/index   ← 主主页（launcher，启动页）
    ├─ 笔上抖音  →  pages/douyin/douyin（原 index 全部内容整体迁来）
-   ├─ 今日头条  →  待做（目前按钮点一下只提示"开发中"）
-   ├─ 多闪私信登录 → pages/chat-login/chat-login
-   └─ 观看历史  → 进抖音页后由其自己打开历史抽屉
+   ├─ 今日头条  →  pages/toutiao/toutiao（观看/点赞/我的/历史 + 评论）
+   ├─ 番茄小说  →  pages/fanqie/fanqie（书架/章节/阅读 + 离线缓存）
+   └─ 观看历史  →  进抖音页后由其自己打开历史抽屉
+多闪私信登录入口与 pages/chat-login 页**已按用户要求删除**（详见 §15.13）
 ```
 
 **为什么主主页放在 `index` 而不是新起一个 `home` 页**
@@ -1494,6 +1495,59 @@ PC 上 17/20 可播、探针 URL 在真机上确实能播、参数完全相同�
 
 **⚠️ 但对"分享页解析 / 导入视频"这条路径，本轮修的是一个确定的黑屏原因** ——
 它们以前拿到的是 403 明文 http 地址，现在会走正常的 https 跳板候选。
+
+### 15.13 抖音页加诊断日志面板 + 抖音风 UI + 删多闪登录（2026-10）
+
+#### ① 左侧/顶部新增**诊断日志面板**（网络诊断 与 视频诊断 分开）
+
+- 入口在**顶部导航右侧的「日志」**按钮（**不放左侧 rail**：rail 已经有 返回 + 5 个分区，
+  再加一个就超出 254px 高度被裁掉 —— 实测踩过）。
+  > ⚠️ 这里还踩了一个 Weex 布局坑：一开始把按钮写成 `position:absolute; right:6px`，
+  > 而 `.topbar` 的宽度只有 **250px**，按钮被算到 topbar 之外（x≈290），**收不到点击**。
+  > 改成 `margin-left` 放进流里就好了。
+- 面板覆盖视频区（左侧让出 46px 分区栏），顶部有 **网络诊断 / 视频诊断** 两个页签，
+  右侧有 重跑 / 复制 / 清空 / 关闭；日志按级别着色（warn 黄 / ok 绿 / 普通白）。
+- **网络诊断**（复用原有 `runNetDiag`，0~10 行）：运行模式、数据源、外层键、Set-Cookie、
+  直连/中转热榜、存储、登录、原生视频模块、导航 API。
+- **视频诊断**（新增 `runVideoDiag`，V0~V6 行）：只看"**这条视频为什么不出画面**"：
+  - `V0` 当前曲目/数据源/videoId
+  - `V1` 播放地址（短网址 + 长度；空则明确提示"还没解析出地址"）
+  - `V2` 候选入口列表（逐个列），并**主动校验两条不变量**：
+    是否出现**明文 http**（应是 https）、是否混入**直链 CDN**（实测恒 403）——出现就标黄
+  - `V3` 原生播放模块可用性 · `V4` 已知坏 CDN 主机 + 中转 · `V5` 上次解析分享页的结果
+  - `V6` **抖音 web 接口清单**（方法 / 路径 / 关键参数 / Referer），`★` 标出本工程在用的
+- 「复制」会把当前页签内容放进应用内剪贴板变量并提示（词典笔没有系统剪贴板）。
+
+#### ② 抖音风 UI：PNG 图标替代文字方块（**不用 emoji**）
+
+屏幕不显示 emoji，所以图标全部是**手绘几何路径生成的 PNG**（`.temp/gen-icons.py`）：
+
+- 左侧分区栏：返回/视频/搜索/发布/消息/我的 都配了图标（文字标签保留，一眼看懂）
+- 右侧互动栏：原来的「赞 / 藏 / 评 / 转」文字方块 → **心形 / 星形 / 气泡 / 分享箭头**，
+  且带**状态变体**：`heart_on`（红心）、`star_on`（黄星）、`comment_on`/`share_on`（青色）
+- 底部音乐行：加音符图标
+
+**★ 图标必须内联成 data URI**（`src/assets/icons.js`，22 个图标共约 **10KB**）：
+实测打包**只把 `package.json` 的 `icon.png` 复制进 `.falcon_`**，
+`src/assets/` 下的散图**不会进包**，运行时加载不到。生成脚本：
+`.temp/gen-icons.py`（画图）→ `.temp/gen-icon-module.py`（内联）。
+
+**顺手修掉生成器一个 bug**：`heart_on` 因为默认参数把 `fill` 盖掉了，生成出来是**白色的**，
+"已点赞"和"未点赞"看不出区别 —— 对照图上才发现。
+
+#### ③ 删除多闪二维码登录（用户要求）
+
+- 删掉 `src/pages/chat-login/`（`.js` + `.vue`），从 `app.json` 移除注册
+- 主主页 `index.vue`：移除「多闪私信登录」入口、顶栏的「多闪 状态」、`chatState` 状态、
+  `openChatLogin()`、以及 `loadGatewayAddr/chatPing` 的 import 与调用
+- **保留 `src/services/chat-api.js`**：它是纯传输层（地址归一/持久化/`/api/*` 封装），
+  单元测试全在（含当年修掉的 `Content-Length` bug），**目前无调用方**，
+  将来要用随时能接回页面。文件头已注明现状。
+- 产物里 `chat-login.js` 已消失（不再打进包）。
+
+`npm test` → **193 PASS / 0 FAIL**；模拟器实测：主主页（无多闪入口）、
+日志面板（网络诊断 24 行、版本号显示 `1.0.2（来源: config.js（权威））`）、
+抖音风图标（左右两侧）全部正常。
 
 
 

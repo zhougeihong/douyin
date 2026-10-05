@@ -1,5 +1,11 @@
 // 多闪（抖音私信）传输层 —— 对 PC 网关（dy-gateway/gateway.py）的 HTTP 客户端
 //
+// ⚠️ 现状（2026-10）：**多闪的二维码登录页与入口已按用户要求删除**
+//    （`src/pages/chat-login/` 已删、`app.json` 去掉了注册、主主页去掉了「多闪私信登录」）。
+//    本模块**保留**：它是纯传输层（地址归一 / 持久化 / `/api/*` 封装），
+//    单元测试全在（含当年修掉的 `Content-Length` 那个 bug），将来要用随时能接回页面。
+//    目前**生产代码没有调用方**。
+//
 // 移植自 D:\duoshan-pen-源码-20261004\duoshan-pen\miniapp\src\utils\{api.js,config.js}，
 // 但按本工程的既有约定重写，**不是照搬**：
 //   1) 网络统一走 src/services/libjsapi.js 的 jsapiHttpRequest()

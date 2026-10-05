@@ -6,7 +6,6 @@
     "toutiao": "pages/toutiao/toutiao",
     "fanqie": "pages/fanqie/fanqie",
     "player": "pages/player/player",
-    "chat-login": "pages/chat-login/chat-login",
     "blank": "pages/blank/blank"
   }
 }

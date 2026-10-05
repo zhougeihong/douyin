@@ -1,13 +1,11 @@
 <template>
   <div class="screen">
-    <!-- ============ 顶栏：一眼看清三边的登录态 ============ -->
+    <!-- ============ 顶栏：一眼看清各边登录态 ============ -->
     <div class="bar">
       <text class="bar-title">字节全家桶</text>
       <text class="bar-sub">词典笔 · v1.0.2 · 横屏 800x254</text>
       <div class="bar-right">
         <text class="bar-stat">抖音 {{ douyinLogged ? '已登录' : '未登录' }}</text>
-        <text class="bar-dot">·</text>
-        <text class="bar-stat">多闪 {{ chatState }}</text>
         <text class="bar-dot">·</text>
         <text class="bar-stat">头条 {{ toutiaoLogged ? '已登录' : '未登录' }}</text>
         <text class="bar-dot">·</text>
@@ -74,9 +72,6 @@
 
     <!-- ============ 右侧工具区 ============ -->
     <div class="side">
-      <div class="side-row" @click="openChatLogin">
-        <text class="side-row-txt">多闪私信登录</text>
-      </div>
       <div class="side-row" @click="openHistory">
         <text class="side-row-txt">观看历史</text>
       </div>
@@ -89,7 +84,6 @@
 <script>
 import { readSession } from '../../utils/auth.js';
 import { jsapiStorageGet } from '../../services/libjsapi.js';
-import { loadGatewayAddr, chatPing } from '../../services/chat-api.js';
 
 const VERSION = '1.0.2';
 
@@ -98,7 +92,6 @@ export default {
   data() {
     return {
       douyinLogged: false,
-      chatState: '未设置',
       toutiaoLogged: false,
       fanqieLogged: false,
       version: VERSION,
@@ -137,34 +130,18 @@ export default {
       this.go('fanqie', { from: 'home' });
     },
 
-    openChatLogin() {
-      this.go('chat-login', {});
-    },
-
     // 首页的「观看历史」进抖音页后由它自己打开历史抽屉
     openHistory() {
       this.go('douyin', { from: 'home', open: 'history' });
     },
 
-    // 读两边各自的登录态，让首页一眼能看出现在什么状态
+    // 读各边的登录态，让首页一眼能看出现在什么状态
     async refreshState() {
       try {
         const session = await readSession();
         this.douyinLogged = !!(session && (session.id || session.nick));
       } catch (error) {
         this.douyinLogged = false;
-      }
-      // 多闪登录态在 PC 网关上；网关不通时只显示状态，不弹错
-      try {
-        const addr = await loadGatewayAddr();
-        if (!addr) {
-          this.chatState = '未设置';
-        } else {
-          const ping = await chatPing();
-          this.chatState = ping && ping.logged_in ? '已登录' : '未登录';
-        }
-      } catch (error) {
-        this.chatState = '网关不通';
       }
       // 头条 / 番茄登录态各用独立 storage key
       try {

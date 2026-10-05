@@ -15,6 +15,11 @@
         <text class="tab-txt" :class="[tab === 'follow' ? 'tab-active' : '']">关注</text>
         <text class="tab-line" v-if="tab === 'follow'"></text>
       </div>
+      <!-- 日志开关放这里（不放左侧 rail：rail 已经有 返回+5 个分区，再加就超出 254px 高度了） -->
+      <div class="logtoggle" :class="[logOpen ? 'logtoggle-on' : '']" @click="toggleLog">
+        <image class="logtoggle-ic" :src="iconUrl('log')" mode="aspectFit"></image>
+        <text class="logtoggle-txt">日志</text>
+      </div>
     </div>
 
     <div class="input-bar" v-if="dockIdx === 0">
@@ -90,12 +95,12 @@
           </div>
           <text class="desc">{{ item.desc }}</text>
           <div class="music-row">
-            <text class="music-label">原声</text>
+            <image class="music-ic" :src="iconUrl('music')" mode="aspectFit"></image>
             <text class="music-txt">{{ item.music }}</text>
           </div>
         </div>
 
-        <!-- 右侧互动栏：全部用中文标签，状态靠颜色区分 -->
+        <!-- 右侧互动栏：抖音式（头像 + 关注 + 图标列），图标用内联 PNG，不用 emoji -->
         <div class="actions">
           <div class="avatar" :style="{ backgroundColor: item.bg }">
             <text class="avatar-txt">{{ avatarChar(item) }}</text>
@@ -104,19 +109,19 @@
             <text class="follow-mark-txt">{{ item.followed ? '已关注' : '关注' }}</text>
           </div>
           <div class="act" @click="like(i)">
-            <text class="act-ic" :class="[item.liked ? 'ic-on' : '']">赞</text>
+            <image class="act-img" :src="iconUrl(item.liked ? 'heart_on' : 'heart')" mode="aspectFit"></image>
             <text class="act-num" :class="[item.liked ? 'num-on' : '']">{{ fmt(item.likes + (item.liked ? 1 : 0)) }}</text>
           </div>
-          <div class="act" @click="collectItem(i)">
-            <text class="act-ic" :class="[item.collected ? 'ic-col' : '']">藏</text>
-            <text class="act-num" :class="[item.collected ? 'num-col' : '']">{{ item.collected ? '已藏' : '收藏' }}</text>
-          </div>
           <div class="act" @click="openComments(i)">
-            <text class="act-ic">评</text>
+            <image class="act-img" :src="iconUrl('comment')" mode="aspectFit"></image>
             <text class="act-num">{{ fmt(item.comments) }}</text>
           </div>
+          <div class="act" @click="collectItem(i)">
+            <image class="act-img" :src="iconUrl(item.collected ? 'star_on' : 'star')" mode="aspectFit"></image>
+            <text class="act-num" :class="[item.collected ? 'num-col' : '']">{{ item.collected ? '已藏' : '收藏' }}</text>
+          </div>
           <div class="act" @click="openShare(i)">
-            <text class="act-ic">转</text>
+            <image class="act-img" :src="iconUrl('share')" mode="aspectFit"></image>
             <text class="act-num">{{ fmt(item.shares) }}</text>
           </div>
         </div>
@@ -350,16 +355,54 @@
     <PinyinIme v-if="imeTarget" @commit="onImeCommit" @insert="onImeInsert"
       @delete-char="onImeDelete" @done="onImeDone" />
 
-    <!-- 左侧分区栏（替代原来的底部导航栏）：横屏只有 254px 高，纵向空间比横向紧张得多，
-         把导航放到左侧竖排更省高度，也给视频画面多留出底部空间。全部用中文标签，无 emoji -->
+    <!-- 左侧分区栏：横屏只有 254px 高，纵向空间比横向紧张得多，
+         把导航放到左侧竖排更省高度，也给视频画面多留出底部空间。
+         图标用内联 PNG（抖音风），文字标签保留以便一眼看懂；无 emoji -->
     <div class="rail">
       <!-- 返回主主页（本页由主主页「笔上抖音」进入） -->
       <div class="rail-back" @click="backHome">
+        <image class="rail-ic" :src="iconUrl('back')" mode="aspectFit"></image>
         <text class="rail-back-txt">返回</text>
       </div>
       <div class="rail-item" v-for="sec in sections" :key="sec.idx" @click="selectPage(sec.idx)">
+        <image class="rail-ic" :src="iconUrl(sec.icon)" mode="aspectFit"></image>
         <text class="rail-txt" :class="[dockIdx === sec.idx ? 'rail-txt-active' : '']">{{ sec.label }}</text>
       </div>
+      <!-- 日志开关已移到顶部导航（rail 放不下），此处不再重复 -->
+    </div>
+
+    <!-- ============ 日志面板（覆盖在视频区之上，左侧留出分区栏）============ -->
+    <div class="logpanel" v-if="logOpen">
+      <div class="log-head">
+        <text class="log-title">诊断日志</text>
+        <!-- 两个页签：网络 / 视频，分开看不互相淹没 -->
+        <div class="log-tab" :class="[logTab === 'net' ? 'log-tab-on' : '']" @click="logTab = 'net'">
+          <text class="log-tab-txt">网络诊断</text>
+        </div>
+        <div class="log-tab" :class="[logTab === 'video' ? 'log-tab-on' : '']" @click="logTab = 'video'">
+          <text class="log-tab-txt">视频诊断</text>
+        </div>
+        <text class="log-count">{{ logLines.length }} 行</text>
+        <div class="log-btn" @click="runDiagnostics" v-if="!logBusy">
+          <image class="log-btn-ic" :src="iconUrl('refresh')" mode="aspectFit"></image>
+          <text class="log-btn-txt">重跑</text>
+        </div>
+        <text class="log-btn-txt" v-else>跑诊断中…</text>
+        <div class="log-btn" @click="copyLog">
+          <text class="log-btn-txt">复制</text>
+        </div>
+        <div class="log-btn" @click="clearLog">
+          <text class="log-btn-txt">清空</text>
+        </div>
+        <div class="log-btn log-btn-close" @click="toggleLog">
+          <text class="log-btn-txt">关闭</text>
+        </div>
+      </div>
+      <scroller class="log-body" show-scrollbar="false">
+        <text class="log-line" v-for="(ln, i) in logLines" :key="'lg' + i"
+          :class="[ln.level === 'warn' ? 'log-warn' : (ln.level === 'ok' ? 'log-ok' : 'log-normal')]">{{ ln.text }}</text>
+        <text class="log-empty" v-if="!logLines.length">点右上「重跑」生成诊断日志。</text>
+      </scroller>
     </div>
 
   </div>
@@ -381,11 +424,42 @@ import { fetchItemInfo } from '../../services/douyin-api.js';
 import { available as nativeVideoAvailable, playUrlCandidates, badHostList, probeCandidatesViaRelay, relayPlayableUrl, play as nativePlay, stop as nativeStop } from '../../services/native-player.js';
 import { setPendingPlay } from '../../services/play-request.js';
 import { API_RELAY, DOUYIN_HOT_FEED_API, APP_VERSION } from '../../config.js';
+import { icon } from '../../assets/icons.js';
 
 // 设备屏是**逻辑横屏 800×254**（物理 254×800，运行时 direction=270）。
 // 之前按竖屏 254×800 写的滑动距离/尺寸在笔上是错的，这里统一按横屏。
 const HEIGHT = 254;
 const WIDTH = 800;
+
+// 抖音 web 端接口清单（方法 / 路径 / 关键参数 / Referer）。
+// 用途有两个：① 视频诊断里列出来，方便对照"哪个环节没走到"；
+//   ② 作为选路的说明书 —— `used: true` 是**本工程实际在用**的，
+//      其余是已知存在但当前没接的（多数需要 a_bogus 签名，见 HANDOFF §15.11）。
+const DOUYIN_APIS = [
+  { method: 'GET', path: '/aweme/v1/web/tab/feed/', params: 'device_platform=webapp, aid=6383, channel=channel_pc_web, count, refresh_index', referer: 'https://www.douyin.com/', used: true },
+  { method: 'GET', path: 'https://www.douyin.com/aweme/v1/play/', params: 'video_id, line, ratio, aid=6383（302 到 douyinvod CDN）', referer: 'https://www.douyin.com/', used: true },
+  { method: 'GET', path: '/aweme/v1/web/aweme/detail/', params: 'aweme_id, request_source=600, origin_type=quick_player', referer: 'https://www.douyin.com/', used: false },
+  { method: 'GET', path: '/aweme/v1/web/aweme/related/', params: 'aweme_id, count, filterGids, sub_channel_id=3, Seo-Flag=0, refresh_index', referer: '?recommend=1', used: false },
+  { method: 'GET', path: '/aweme/v1/web/danmaku/get_v2/', params: 'app_name=aweme, format=json, group_id, item_id, start_time, end_time, duration, authentication_token', referer: 'https://www.douyin.com/video/{id}', used: false },
+  { method: 'GET', path: '/aweme/v2/web/aweme/stats/', params: 'aweme_type, item_id, play_delta=1, source=0（播放上报）', referer: 'https://www.douyin.com/', used: false },
+  { method: 'GET', path: '/aweme/v1/web/history/write/', params: 'author_id, aweme_id（写播放历史）', referer: 'https://www.douyin.com/', used: false },
+  { method: 'GET', path: '/aweme/v1/web/emoji/list', params: '公共参数', referer: 'https://www.douyin.com/', used: false },
+  { method: 'GET', path: '/aweme/v1/web/hot/search/list/', params: '公共参数（抖音热榜 web 版）', referer: 'https://www.douyin.com/', used: false }
+];
+
+// 从一行的内容猜日志级别：用于给日志上色（warn 黄 / ok 绿 / 普通白）
+function levelOfLogLine(text) {
+  const s = String(text || '');
+  if (/失败|异常|错误|警告|连不上|\*\*|不可用|✗|❌/.test(s)) return 'warn';
+  if (/OK|成功|正常|✅|可用/.test(s)) return 'ok';
+  return 'normal';
+}
+
+// 日志里显示的短地址（去掉协议头，太长的截断）
+function shortUrl(u) {
+  const s = String(u || '').replace(/^https?:\/\//, '');
+  return s.length > 74 ? (s.slice(0, 52) + '…' + s.slice(-18)) : s;
+}
 
 export default {
   name: 'Douyin',
@@ -396,14 +470,21 @@ export default {
       WIDTH,
       // 左侧分区栏条目（替代底部导航栏）
       sections: [
-        { idx: 0, label: '视频' },
-        { idx: 1, label: '搜索' },
-        { idx: 2, label: '发布' },
-        { idx: 3, label: '消息' },
-        { idx: 4, label: '我的' }
+        { idx: 0, label: '视频', icon: 'home' },
+        { idx: 1, label: '搜索', icon: 'search' },
+        { idx: 2, label: '发布', icon: 'plus' },
+        { idx: 3, label: '消息', icon: 'message' },
+        { idx: 4, label: '我的', icon: 'profile' }
       ],
       tab: 'rec',
       dockIdx: 0,
+      // ---- 诊断日志面板（左侧 rail 的「日志」）----
+      logOpen: false,          // 面板开关（默认关，点顶部「日志」打开）
+      logTab: 'net',           // 'net' 网络诊断 / 'video' 视频诊断
+      logBusy: false,
+      netLog: [],              // 网络诊断的行（运行网络诊断时填）
+      videoLog: [],            // 视频诊断的行
+      logClipboard: '',        // 「复制」放这里（词典笔无系统剪贴板）
       cur: 0,
       dragY: 0,
       startY: 0,
@@ -469,6 +550,10 @@ export default {
     this._smsTimer = null;
   },
   computed: {
+    // 日志面板当前页签要显示的行
+    logLines() {
+      return this.logTab === 'video' ? this.videoLog : this.netLog;
+    },
     visibleList() {
       if (this.tab === 'live') return this.list.filter((item) => item.live);
       if (this.tab === 'follow') return this.list.filter((item) => item.followed);
@@ -1345,9 +1430,104 @@ export default {
       }
       this.netDiag = steps;
       this.netDiagRunning = false;
+      // 同步到左侧日志面板（网络页签），行级标注 ok/warn 便于一眼扫
+      this.netLog = steps.map((t) => ({ text: t, level: levelOfLogLine(t) }));
 
       // 诊断已证明通路可用，而视频页还停在离线样例 → 自动重载一次
       if (directOk && this.offlineFallback) this.reloadVideos();
+    },
+
+    // ==================== 左侧日志面板 ====================
+    iconUrl(name) {
+      // 图标内联在 assets/icons.js（打包不会带 src/assets 下的散图，见该文件说明）
+      return icon(name);
+    },
+    toggleLog() {
+      this.logOpen = !this.logOpen;
+      // 首次打开自动跑一遍，省得用户再点一次
+      if (this.logOpen && !this.netLog.length && !this.videoLog.length) this.runDiagnostics();
+    },
+    clearLog() {
+      this.netLog = [];
+      this.videoLog = [];
+    },
+    copyLog() {
+      // 词典笔没有系统剪贴板，放一份到本页内存 + 提示，便于贴到「我的 → 粘贴 Cookie」
+      const text = this.logLines.map((l) => l.text).join('\n');
+      if (!text) { this.showToast('没有可复制的日志'); return; }
+      this.logClipboard = text;
+      this.showToast('日志已放入应用内剪贴板（' + this.logLines.length + ' 行），可在输入框里长按粘贴', 3000);
+    },
+    async runDiagnostics() {
+      if (this.logBusy) return;
+      this.logBusy = true;
+      try {
+        // 先跑视频诊断（纯本地、极快），再跑网络诊断（要发请求，较慢）
+        this.runVideoDiag();
+        await this.runNetDiag();
+      } catch (error) {
+        this.pushLog('net', '诊断异常: ' + ((error && error.message) || ''), 'warn');
+      } finally {
+        this.logBusy = false;
+      }
+    },
+    pushLog(which, text, level) {
+      const arr = which === 'video' ? this.videoLog : this.netLog;
+      arr.push({ text: String(text || ''), level: level || levelOfLogLine(text) });
+    },
+
+    // ---------- 视频诊断：只看"当前这条视频"能不能播，以及各接口的状态 ----------
+    // 与网络诊断分开：网络诊断回答"数据通不通"，视频诊断回答"这条视频为什么不出画面"。
+    runVideoDiag() {
+      const out = [];
+      const push = (t, lv) => out.push({ text: t, level: lv || levelOfLogLine(t) });
+      const item = this.visibleList[this.cur] || {};
+
+      push('V0 曲目: ' + (this.cur + 1) + '/' + this.visibleList.length
+        + ' · 数据源=' + (item.source || '未知') + (item.videoId ? ' · id=' + String(item.videoId).slice(-10) : ''));
+
+      // 1) 播放地址与候选
+      const raw = item.playUrl || '';
+      if (!raw) {
+        push('V1 播放地址: **空** → 这条还没解析出地址（点封面会触发解析）', 'warn');
+      } else {
+        push('V1 播放地址: ' + shortUrl(raw) + ' · len=' + raw.length);
+        const cand = playUrlCandidates(raw, item.playCandidates || []);
+        push('V2 候选入口: ' + cand.length + ' 个（播放页按序重试）');
+        cand.slice(0, 8).forEach((u, i) => {
+          push('V2 [' + (i + 1) + '] ' + shortUrl(u), 'normal');
+        });
+        // 明文 http 是不允许的（旧前提已被推翻）—— 出现就是回归
+        const httpOnes = cand.filter((u) => String(u).indexOf('http://') === 0);
+        push(httpOnes.length
+          ? ('V2 警告: 有 ' + httpOnes.length + ' 个候选是**明文 http**（应为 https，属回归）')
+          : 'V2 协议检查: 候选全是 https ✅', httpOnes.length ? 'warn' : 'ok');
+        // 直链 CDN 不该进候选（那些直链恒 403）
+        const cdnOnes = cand.filter((u) => /douyinvod|douyinpic|bytecdn/.test(String(u)));
+        push(cdnOnes.length
+          ? ('V2 警告: 候选里有 ' + cdnOnes.length + ' 个直链 CDN（实测恒 403）')
+          : 'V2 直链检查: 不含 CDN 直链 ✅', cdnOnes.length ? 'warn' : 'ok');
+      }
+
+      // 2) 原生播放器能力
+      push('V3 原生播放模块: ' + (this.nativeVideoReady ? '可用 ✅' : '不可用（页内回退）'),
+        this.nativeVideoReady ? 'ok' : 'warn');
+      push('V4 已知坏 CDN 主机: ' + (badHostList().length ? badHostList().join(',') : '无'));
+      push('V4 中转: ' + (relayPlayableUrl('https://x/y') ? API_RELAY : '未配置'));
+
+      // 3) 上次"点解析"的结果（分享页解析链路）
+      push('V5 上次解析: ' + (this.lastResolve || '（本次启动还没点过解析）'),
+        /失败/.test(String(this.lastResolve)) ? 'warn' : 'normal');
+
+      // 4) 接口清单：把抖音 web 端各接口的**方法/路径/关键参数/Referer** 列出来，
+      //    并标出本工程实际用了哪些 —— 方便对照"哪个环节没走到"。
+      push('V6 抖音 web 接口清单（★=本工程在用）:');
+      DOUYIN_APIS.forEach((a) => {
+        push('V6 ' + (a.used ? '★' : '·') + ' ' + a.method + ' ' + a.path
+          + '  [' + a.params + ']' + (a.referer ? '  Referer=' + a.referer : ''));
+      });
+
+      this.videoLog = out;
     },
 
     openComments(i) {
@@ -1684,6 +1864,151 @@ export default {
   border-radius: 6px;
   margin-bottom: 4px;
 }
+.rail-ic {
+  width: 15px;
+  height: 15px;
+  margin-bottom: 1px;
+}
+.rail-back {
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+}
+.rail-back-txt {
+  margin-left: 2px;
+}
+/* 日志开关：打开时高亮（抖音红） */
+.rail-log {
+  margin-top: 2px;
+  background-color: rgba(255, 255, 255, 0.08);
+}
+.rail-log-on {
+  background-color: rgba(254, 44, 85, 0.3);
+}
+
+/* 日志开关（顶部导航右侧） */
+.logtoggle {
+  height: 18px;
+  padding-left: 7px;
+  padding-right: 7px;
+  margin-left: 10px;
+  border-radius: 9px;
+  background-color: rgba(255, 255, 255, 0.14);
+  flex-direction: row;
+  align-items: center;
+}
+.logtoggle-on {
+  background-color: #fe2c55;
+}
+.logtoggle-ic {
+  width: 10px;
+  height: 10px;
+  margin-right: 3px;
+}
+.logtoggle-txt {
+  color: #ffffff;
+  font-size: 9px;
+  font-weight: bold;
+}
+
+/* ============ 日志面板（覆盖视频区，左侧留出分区栏）============ */
+.logpanel {
+  position: absolute;
+  left: 46px;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  background-color: rgba(10, 10, 12, 0.97);
+  flex-direction: column;
+}
+.log-head {
+  flex-direction: row;
+  align-items: center;
+  height: 26px;
+  padding-left: 8px;
+  padding-right: 6px;
+  background-color: #17171c;
+  border-bottom-width: 1px;
+  border-bottom-style: solid;
+  border-bottom-color: rgba(255, 255, 255, 0.12);
+}
+.log-title {
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: bold;
+  margin-right: 8px;
+}
+.log-tab {
+  height: 18px;
+  padding-left: 8px;
+  padding-right: 8px;
+  margin-right: 4px;
+  border-radius: 9px;
+  background-color: rgba(255, 255, 255, 0.1);
+  justify-content: center;
+  align-items: center;
+}
+.log-tab-on {
+  background-color: #fe2c55;
+}
+.log-tab-txt {
+  color: #ffffff;
+  font-size: 9px;
+}
+.log-count {
+  flex: 1;
+  color: #6f757c;
+  font-size: 9px;
+}
+.log-btn {
+  height: 18px;
+  padding-left: 8px;
+  padding-right: 8px;
+  margin-left: 4px;
+  border-radius: 9px;
+  background-color: rgba(255, 255, 255, 0.14);
+  justify-content: center;
+  align-items: center;
+  flex-direction: row;
+}
+.log-btn-close {
+  background-color: rgba(254, 44, 85, 0.9);
+}
+.log-btn-ic {
+  width: 10px;
+  height: 10px;
+  margin-right: 3px;
+}
+.log-btn-txt {
+  color: #ffffff;
+  font-size: 9px;
+}
+.log-body {
+  flex: 1;
+  padding-left: 8px;
+  padding-right: 8px;
+  padding-top: 4px;
+}
+.log-line {
+  font-size: 9px;
+  line-height: 14px;
+  margin-bottom: 1px;
+}
+.log-normal {
+  color: rgba(255, 255, 255, 0.82);
+}
+.log-ok {
+  color: #4ad07a;
+}
+.log-warn {
+  color: #ffaa2b;
+}
+.log-empty {
+  color: #6f757c;
+  font-size: 10px;
+  margin-top: 10px;
+}
 /* 返回主主页：254px 高度紧张，所以做矮一点，给下面 5 个分区腾地方 */
 .rail-back {
   width: 40px;
@@ -1922,6 +2247,17 @@ export default {
   font-size: 13px;
   color: #ffffff;
   margin-bottom: 1px;
+}
+/* 抖音风右侧互动栏：图标用内联 PNG（不再用「赞/评/转」文字方块） */
+.act-img {
+  width: 22px;
+  height: 22px;
+  margin-bottom: 2px;
+}
+.music-ic {
+  width: 12px;
+  height: 12px;
+  margin-right: 4px;
 }
 .ic-on {
   color: #fe2c55;
