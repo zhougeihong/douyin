@@ -163,15 +163,19 @@ export default {
     // 有的不要求（200）。重试会重抽落点主机 —— 实测单形态 ~68%，轮换候选可达 100%。
     // 这样**不需要 PC 中转**也能播抖音 web feed 的视频。
     async startWithFallback(candidates, resumeMs) {
-      // 尝试上限：候选会有 7~8 个，但真机上一次次 stop/open 很重，太多轮会拖很久、
-      // 也增加原生模块出错的风险 —— 取前 4 个足够覆盖"重抽落点"的机会。
-      const MAX_TRIES = 4;
+      // 尝试上限：候选有 8 个，**不要砍太狠**。
+      // ★ PC 实测（20 条真实 uri，按候选顺序逐个试到成功）：
+      //     第 1 个就成功 13/20、前 2 个 14、前 4 个 19、**全部 8 个 = 20/20（100%）**
+      //   → 之前把上限设成 4，等于**自己把 100% 砍到 95%**。
+      //   现在放到 8（全试），由下面的"首帧总预算"控制总耗时，而不是靠砍候选数。
+      const MAX_TRIES = 8;
       const list = (candidates || []).filter(Boolean).slice(0, MAX_TRIES);
       if (!list.length) return false;
-      // 等首帧的**总预算**：单个候选最多 FIRST_FRAME_MS，但所有候选加起来不超过这个数，
-      // 否则一个彻底播不了的视频会让用户干等 25 秒（4 × 6s）。
+      // 等首帧的**总预算**：单个候选最多 FIRST_FRAME_MS，但所有候选加起来不超过这个数。
+      // 取值依据同上：平均要试 2~3 次才成功，所以给到 20s；最坏情况也不会无限等下去。
+      // 预算耗尽就停（`frameBudgetMs <= 0` 时 break），不再让用户干等。
       const FIRST_FRAME_MS = 6000;
-      let frameBudgetMs = 14000;
+      let frameBudgetMs = 20000;
       let lastError = '';
       for (let i = 0; i < list.length; i++) {
         if (i > 0) {

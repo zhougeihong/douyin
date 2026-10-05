@@ -552,6 +552,11 @@ assert(tt.commentsOf(many, 'g')[49].text === 'c59', '保留的是最新 50 条')
     '不得退回"只等 600ms 一次就判死"的写法');
   assert(/frameBudgetMs/.test(codeOnly),
     '有首帧等待的**总预算**（避免多候选累计让用户干等 25 秒）');
+  // 尝试上限不许砍太狠：PC 实测「全部 8 个候选 = 100%，只试前 4 个 = 95%」——
+  // 把上限设成 4 等于自己把 100% 砍到 95%。
+  const mt = /const MAX_TRIES = (\d+)/.exec(codeOnly);
+  assert(mt && Number(mt[1]) >= 8,
+    'MAX_TRIES 不得小于 8（实测全 8 个候选才 100%，前 4 个只有 95%）= ' + (mt && mt[1]));
 }
 
 // ---- 3r) 版本号/名称一致性（**防两处漂移**）----
