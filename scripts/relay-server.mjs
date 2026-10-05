@@ -45,6 +45,14 @@ const server = http.createServer((req, res) => {
   const target = q.searchParams.get('url') || '';
   // meta=1：把响应头一起回传（JSON 信封），设备端据此拿 Set-Cookie 做登录态
   const wantMeta = q.searchParams.get('meta') === '1';
+  // probe=1：**只探测可达性**，不把媒体流传给设备。
+  //   为什么需要：设备的 JS 通道**绝不能自己去 GET 视频地址**（二进制灌进原生字符串通道
+  //   → 词典笔软重启，见 HANDOFF §9/§13.10）。所以把"这个入口最终能不能连上"这件事
+  //   交给 PC 中转做，设备只读一个几十字节的 JSON。
+  //   实测背景（§13.9）：抖音会把视频解析到**已坏的 CDN 主机**
+  //   （如 v95-bjb-mc-cold.douyinvod.com，DNS 永久 ENOTFOUND），
+  //   且**同一个 uri 的落点主机是固定的**（连续 6 次都一样）→ 多入口轮换救不了它。
+  const wantProbe = q.searchParams.get('probe') === '1';
   let targetUrl;
   try {
     targetUrl = new URL(target);
@@ -95,6 +103,26 @@ const server = http.createServer((req, res) => {
   // 设备拿到的只是那 600 字节的跳转体，FFmpeg 直接 open-failed。
   followUpstream(targetUrl, { method, headers: upstreamHeaders, body: reqBody, hops: 3 }, (ur) => {
     logAccess(target, ur.statusCode || 502, req);
+    if (wantProbe) {
+      // 只回"能不能连上 + 落点主机 + 状态码"，**不转发 body**，设备端拿到的永远是几百字节。
+      // 判据：2xx/3xx 且 content-type 像媒体 → ok；否则不可达/不可播。
+      const ct = String(ur.headers['content-type'] || '');
+      const ok = (ur.statusCode >= 200 && ur.statusCode < 400);
+      let landingHost = '';
+      try { landingHost = new URL(target).hostname; } catch (e) { /* 忽略 */ }
+      res.writeHead(200, { 'content-type': 'application/json', 'x-relayed': '1' });
+      res.end(JSON.stringify({
+        probe: 1,
+        ok: ok,
+        status: ur.statusCode || 502,
+        contentType: ct,
+        looksVideo: /video|octet-stream/i.test(ct),
+        length: ur.headers['content-length'] || '',
+        entryHost: landingHost
+      }));
+      ur.resume();   // 丢掉 body，避免上游连接挂住
+      return;
+    }
     if (wantMeta) {
       // 收全再回：设备端只能读 body，读不到响应头，所以把 header 塞进信封
       const chunks = [];
@@ -121,10 +149,18 @@ const server = http.createServer((req, res) => {
     res.writeHead(ur.statusCode || 502, outHeaders);
     ur.pipe(res);
   }, (e) => {
-    logAccess(target, 'ERR ' + String(e && e.message || e), req);
+    const msg = String(e && e.message || e);
+    logAccess(target, 'ERR ' + msg, req);
     if (!res.headersSent) {
-      res.writeHead(502, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ relay_error: String(e && e.message || e) }));
+      // probe 模式**必须回 200 + ok:false**，不能用 502 —— 否则设备端把"连不上"当成
+      // "中转本身出错"，分不清是入口坏还是中转坏（实测坏主机走这里）。
+      if (wantProbe) {
+        res.writeHead(200, { 'content-type': 'application/json', 'x-relayed': '1' });
+        res.end(JSON.stringify({ probe: 1, ok: false, status: 0, error: msg }));
+      } else {
+        res.writeHead(502, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ relay_error: msg }));
+      }
     } else {
       res.end();
     }

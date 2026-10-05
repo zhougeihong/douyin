@@ -382,29 +382,24 @@ export default {
       this.errorText = '没有拿到播放地址';
       return;
     }
+
+    // ① 候选入口（跳板入口会展开成多形态）+ 主机健康度排序。
+    //    ⛔ 设备端**不做媒体探测** —— 用 JS 的 http 通道读视频字节会把二进制灌进
+    //    原生字符串通道，实测**导致词典笔软重启**（见 native-player.js 顶部的警告）。
+    //    坏主机的发现靠原生播放器自己的失败结果（start 里 markHostBad）；
+    //    "哪些入口根本连不上"用诊断页的「中转探测」看（不阻塞播放）。
+    let list = orderByHostHealth(playUrlCandidates(this.path, this.candidates));
+    const badHosts = badHostList();
+    if (badHosts.length) this.dbg = '已知坏主机 ' + badHosts.length + ' 个 | ' + this.dbgBase;
+
     if (this.fallbackMode) {
-      // 浏览器预览：没有原生模块，用 HTML5 播放器顶一下
+      // 浏览器预览 / 模拟器无原生视频模块：没有内置播放器可顶，直接如实提示。
       this.playing = true;
       this.showHint = false;
       return;
     }
     const resumeMs = await this.restoreProgress();
     try {
-      // ① 候选入口（跳板入口会展开成多形态）。
-      //    ⛔ 这里**不再**尝试"解析成明文 http 直链"：那会对**视频地址发 GET**，
-      //    违反 native-player.js 顶部的禁令（会把二进制灌进原生字符串通道 → 软重启）；
-      //    而且它依据的"模块没有 TLS"前提已被真机诊断推翻（HANDOFF §13.7）。
-      //    真正有效的做法是按 CDN 主机健康度排序 + 逐个入口试（见下）。
-      let list = playUrlCandidates(this.path, this.candidates);
-
-      // ② 按「CDN 主机健康度」排序：失败过的落点主机沉底。
-      //    ⛔ 这里**不做媒体探测** —— 用 JS 的 http 通道读视频字节会把二进制灌进
-      //    原生字符串通道，实测**导致词典笔软重启**（见 native-player.js 顶部的警告）。
-      //    坏主机的发现靠原生播放器自己的失败结果（见 start 里 markHostBad）。
-      list = orderByHostHealth(list);
-      const badHosts = badHostList();
-      if (badHosts.length) this.dbg = '已知坏主机 ' + badHosts.length + ' 个 | ' + this.dbgBase;
-
       const okPlay = await this.startWithFallback(list.length ? list : [this.path], resumeMs);
       if (!okPlay) {
         this.errorText = '无法播放\n' + (this.lastPlayError || '未知错误');

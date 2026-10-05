@@ -378,7 +378,7 @@ import { jsapiHttpRequest, previewPayload, storageSelfCheck } from '../../servic
 import { videoCapsText } from '../../services/video-caps.js';
 import { loadCookies, cookieSummary, hasLoginCookie, cookieCount, clearCookies, saveCookiesFromText, inspectRawForCookies } from '../../services/session-cookies.js';
 import { fetchItemInfo } from '../../services/douyin-api.js';
-import { available as nativeVideoAvailable, nativePlayableUrl, playUrlCandidates, badHostList, play as nativePlay, stop as nativeStop } from '../../services/native-player.js';
+import { available as nativeVideoAvailable, nativePlayableUrl, playUrlCandidates, badHostList, probeCandidatesViaRelay, play as nativePlay, stop as nativeStop } from '../../services/native-player.js';
 import { setPendingPlay } from '../../services/play-request.js';
 import { API_RELAY, DOUYIN_HOT_FEED_API } from '../../config.js';
 
@@ -1197,19 +1197,39 @@ export default {
         steps.push('12 首条: 检测失败 ' + ((error && error.message) || ''));
       }
 
-      // 13) ⛔ 这里曾经用 JS 的 http 通道去"探测"候选播放入口 —— **已删除**。
-      //     原因：那等于把视频二进制灌进原生字符串通道，真机上**导致词典笔软重启**
-      //     （HANDOFF §9 早有记录：原生 http 的字符串通道会损坏二进制）。
-      //     现在只报告**非侵入式**的信息：候选数量 + 已知坏 CDN 主机。
-      //     真正的可达性判断交给原生播放器自己（失败即 markHostBad），单测见 native-player.js。
+      // 13) 播放候选 + **中转可达性探测**。
+      //     ⛔ 历史上这里用 JS 的 http 通道直接 GET 候选地址 —— 那等于把视频二进制灌进
+      //     原生字符串通道，真机上**导致词典笔软重启**（HANDOFF §9）。**绝不能再那样做**。
+      //     ✅ 现在改成让 **PC 中转**去试（relay 的 &probe=1 端点），设备只读几十字节 JSON。
+      //     为什么需要探测：实测抖音会把视频解析到**已坏的 CDN 主机**（DNS 永久 ENOTFOUND），
+      //     且**同一 uri 的落点主机是固定的**（连续 6 次都一样）→ 多入口轮换救不了它，
+      //     只能提前剔除。详见 HANDOFF §15.8。
       try {
         const cand = playUrlCandidates((this.list[0] && this.list[0].playUrl) || '', []);
         const bad = badHostList();
         steps.push('13 播放候选: ' + cand.length + ' 个'
           + (cand.length ? '（首个 ' + String(cand[0]).replace(/^https?:\/\//, '').slice(0, 34) + '）' : '（首条还没有播放地址）')
           + ' · 已知坏主机 ' + (bad.length ? bad.join(',') : '无'));
+
+        if (!cand.length) {
+          steps.push('14 中转探测: 无候选可探');
+        } else {
+          const probed = await probeCandidatesViaRelay(cand, { limit: 4, timeoutMs: 9000 });
+          if (!probed) {
+            steps.push('14 中转探测: 未启用（API_RELAY 为空）或全部不可探');
+          } else {
+            steps.push('14 中转探测: ' + probed.good.length + ' 个可达 · ' + probed.bad.length + ' 个连不上');
+            // 把坏的挑出来单独一行，指明是哪台主机坏了（这是能直接指导修复的信息）
+            probed.bad.slice(0, 3).forEach((b, i) => {
+              let host = '';
+              const m = /^https?:\/\/([^/?#]+)/i.exec(String(b.url || ''));
+              if (m) host = m[1];
+              steps.push('14 坏入口' + (i + 1) + ': ' + host + ' → ' + String(b.error || '').slice(0, 46));
+            });
+          }
+        }
       } catch (error) {
-        steps.push('13 播放候选: 异常 ' + ((error && error.message) || ''));
+        steps.push('13/14 播放候选探测: 异常 ' + ((error && error.message) || ''));
       }
 
       // 10) 本机存储：登录态 / Cookie / 导入视频都靠它持久化，

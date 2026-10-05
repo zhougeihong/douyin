@@ -13,8 +13,9 @@
 // 坐标系：rect 全部用**逻辑横屏 800×254**（与原生 blit 一致）；设备屏就是 800×254 逻辑。
 
 import { API_RELAY, VIDEO_RELAY } from '../config.js';
-// 注意：本模块**不导入** jsapiHttpRequest —— 播放链路上不得对视频地址发任何 http 请求
-// （会把二进制灌进原生字符串通道，实测导致词典笔软重启，见下方说明）。
+import { jsapiHttpRequest } from './libjsapi.js';
+// 上面这个 jsapiHttpRequest **只用于 probeCandidatesViaRelay**（读中转回的几十字节 JSON）。
+// ⛔ 绝不能用它去 GET 视频/媒体地址 —— 二进制灌进原生字符串通道会导致词典笔软重启（见下方说明）。
 
 export const SCREEN_W = 800;
 export const SCREEN_H = 254;
@@ -141,6 +142,42 @@ export function isErrorBody(text) {
   if (s.charAt(0) !== '{') return false;      // 非 JSON
   if (!/"error"\s*:/.test(s)) return false;
   return !/"aweme_list"|"video"|"play_addr"/.test(s);
+}
+
+// ★★ 播放前的**可达性探测**（安全版）：让 **PC 中转**去试，设备只读一个几十字节的 JSON。
+//
+// 为什么必须走中转：设备端的 JS 通道**绝不能自己去 GET 视频地址** ——
+// 会把二进制灌进原生字符串通道，实测导致词典笔软重启（§9 / §13.10）。
+// 而"这个入口最终连不连得上"又确实需要提前知道，因为实测（§13.9、§15.8）：
+//   · 抖音会把视频解析到**已坏的 CDN 主机**（如 v95-bjb-mc-cold.douyinvod.com，DNS 永久 ENOTFOUND）；
+//   · **同一个 uri 的落点主机是固定的**（连续 6 次请求都一样）→ 多入口轮换救不了它。
+// 所以先用中转探一遍、把连不上的候选剔掉，能省掉设备上注定失败的播放尝试。
+//
+// 前提：配了 API_RELAY。没配就返回 null，调用方按原顺序试（不改变原有行为）。
+export async function probeCandidatesViaRelay(urls, options) {
+  const opt = options || {};
+  const relay = opt.relay || API_RELAY || VIDEO_RELAY;
+  if (!relay) return null;                     // 没中转就不探（不改变原有行为）
+  const list = (Array.isArray(urls) ? urls : []).filter(Boolean).slice(0, opt.limit || 4);
+  if (!list.length) return null;
+
+  const good = [];
+  const bad = [];
+  for (let i = 0; i < list.length; i++) {
+    const u = list[i];
+    const probeUrl = relay.replace(/\/$/, '') + '/relay?url=' + encodeURIComponent(u) + '&probe=1';
+    try {
+      const body = await jsapiHttpRequest({ url: probeUrl, method: 'GET', timeoutMs: opt.timeoutMs || 9000 });
+      const info = typeof body === 'string' ? JSON.parse(body) : body;
+      if (info && info.ok) good.push(u);
+      else bad.push({ url: u, error: (info && info.error) || ('status ' + (info && info.status)) });
+    } catch (error) {
+      // 探测本身失败（中转不通等）：**不要**因此判死候选，交回给播放器照常试
+      return null;
+    }
+  }
+  if (!good.length) return null;               // 全探挂也别拦着播放器，让它自己试
+  return { good: good, bad: bad };
 }
 
 // ★ 这里原本有 `httpOf` / `looksLikeMediaUrl` / `locationFrom` / `resolvePlainHttpUrl` /
@@ -302,6 +339,6 @@ export async function status() {
 export default {
   available, play, pause, resume, stop, seek, setRate, setVolume, setView,
   position, duration, status, nativePlayableUrl, playUrlCandidates,
-  orderByHostHealth, markHostBad, isHostBad, badHostList,
+  orderByHostHealth, markHostBad, isHostBad, badHostList, probeCandidatesViaRelay,
   SCREEN_W, SCREEN_H
 };

@@ -61,7 +61,9 @@ function nodeGetText(url, headers) {
   return new Promise((resolve, reject) => {
     const client = url.startsWith('https:') ? https : http;
     const req = client.get(url, { headers: headers || { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
-      // 跟随重定向（短链解析依赖），与原生 libjsapi curl 的 FOLLOWLOCATION 行为一致
+      // ⚠️ 这个桩**会跟随重定向**，但**真实固件不会**（HANDOFF §12.10：
+      //    jsapiHttpRequest 与 relay 都不跟随重定向）。这里跟随只是为了桩自身好用
+      //    （短链解析等），**不要**因此以为生产环境也跟随 —— 两者行为不同。
       if (res.statusCode >= 301 && res.statusCode <= 308 && res.headers.location) {
         res.resume();
         nodeGetText(new URL(res.headers.location, url).href, headers).then(resolve, reject);
@@ -729,13 +731,37 @@ assert(noId[0] === 'https://example.com/x.mp4', '无 video_id 时原样返回');
 //   ④ 真正根因是**落点 CDN 主机坏**（§13.9），修法是主机黑名单，已能治。
 assert(typeof np.resolvePlainHttpUrl === 'undefined' && typeof np.cachedPlainHttpUrl === 'undefined',
   '危险/死代码已删除：不再导出 resolvePlainHttpUrl / cachedPlainHttpUrl');
-// 源码级断言：native-player.js 里不得再出现对视频地址的 http 请求（withMeta 解析那套）
+// 源码级断言：native-player.js 里**唯一**允许用 jsapiHttpRequest 的地方是
+// probeCandidatesViaRelay（它请求的是**中转的 probe 端点**，只回几十字节 JSON）。
+// 绝不允许把视频/媒体地址本身交给 jsapiHttpRequest。
 {
   const npSrc = fs.readFileSync(path.join(root, 'src', 'services', 'native-player.js'), 'utf8');
   const codeOnly = npSrc.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
-  assert(codeOnly.indexOf('jsapiHttpRequest') < 0,
-    'native-player.js 不再使用 jsapiHttpRequest（不得对视频/接口发 GET 读字节）');
   assert(codeOnly.indexOf('LOCATION_CACHE') < 0, 'native-player.js 不再有 LOCATION_CACHE');
+  // jsapiHttpRequest 只能出现在 probeCandidatesViaRelay 内部，且该函数的 URL 必须带 probe=1
+  const idx = codeOnly.indexOf('jsapiHttpRequest');
+  let probeFn = '';
+  if (idx >= 0) {
+    const start = codeOnly.indexOf('probeCandidatesViaRelay');
+    probeFn = codeOnly.slice(start, start + 900);
+  }
+  assert(idx >= 0 && codeOnly.split('jsapiHttpRequest').length - 1 === 2,
+    'jsapiHttpRequest 只出现 2 次（import + probe 一处调用）');
+  assert(probeFn.indexOf("'&probe=1'") >= 0,
+    'probe 只打中转的 &probe=1 端点，而不是把视频地址直接交出去');
+  // 关键：探针函数里不得出现"直接对候选 URL 发请求"的形态（u 必须被 encode 进中转 URL）
+  assert(probeFn.indexOf('url: probeUrl') >= 0, 'probe 请求的是 probeUrl（中转端点）而非候选原文');
+}
+
+// probe：没配中转时必须返回 null（不改变原有直连行为）
+const probeNoRelay = await np.probeCandidatesViaRelay(['https://aweme.snssdk.com/aweme/v1/play/?video_id=x']);
+assert(probeNoRelay === null, '未配中转时 probe 返回 null（不改原有行为）');
+assert((await np.probeCandidatesViaRelay([])) === null, '空候选返回 null');
+// probe 的 URL 组装：必须是 /relay?url=<encode>&probe=1，而不是直接把视频地址发出去
+{
+  const npSrc = fs.readFileSync(path.join(root, 'src', 'services', 'native-player.js'), 'utf8');
+  assert(/\/relay\?url=' \+ encodeURIComponent\(u\) \+ '&probe=1'/.test(npSrc),
+    'probe 端点组装正确（encode + &probe=1）');
 }
 
 // ---- 3p) 播放入口的「坏 CDN 主机」处理 ----
