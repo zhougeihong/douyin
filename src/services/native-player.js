@@ -48,21 +48,13 @@ export async function available() {
   return !!(await api());
 }
 
-// 网络地址 → 原生解码器可读的地址。
-//
-// 真机实测（2026-10，抖音 web feed 的视频）：
-//   `/aweme/v1/play/?video_id=…` 是**302 跳板**，落点 douyinvod 的 CDN **要求带 Referer**：
-//   PC 上六种组合实测 —— 带 Referer → 200 video/mp4；**只带 UA 不带 Referer → 403**。
-//   设备的 FFmpeg 跟 302 时不会把 Referer 带过去 → 真机直接 `open-failed`。
-//   所以「跳转入口」这类**优先交给中转**（中转服务端已会跟 302 并补 Referer/Range）。
-//
-// 其余优先级：
-//   ① **直链 CDN**（douyinvod 那类，不是 /aweme/v1/play 的 302 入口）→ https 换明文 http：
-//      实测这类 CDN 支持 http + Range → 不需要 TLS 就能播；
-//   ② 普通 https → 配了中转就过中转（顺带解决无 TLS 固件）；
-//   ③ 都没配 → 原样返回（固件 FFmpeg 自带 TLS 时也能播）。
-// 想强制直连：把 VIDEO_RELAY / API_RELAY 置空。
 // 把地址包一层 PC 中转（设备端只读 body，读不到响应头，所以走中转由 PC 补齐头并跟跳转）
+//
+// ★ 关于 Referer 的更正（2026-10 对照实验，**旧注释写错了，已改**）：
+//   旧注释断言"CDN 落点要求带 Referer，否则 403，所以跳转入口必须走中转"。
+//   实测 **26 个落点对照**：只带 UA 19/26 成功、带 Referer 18/26、**被 Referer 救回 0 条**
+//   → Referer 与 403 无关。真正的失败是**落点主机的 DNS 不通**（§13.9/§15.8）。
+//   所以中转现在是**可选兜底**（API_RELAY 留空也能播），不再是必需。
 export function relayPlayableUrl(url) {
   const raw = String(url || '');
   if (!raw) return '';
@@ -207,8 +199,16 @@ export function playUrlCandidates(url, candidates) {
   const uri = (/\bvideos?_id=([^&]+)/.exec(raw) || /[?&]video_id=([^&]+)/.exec(raw) || [])[1] || '';
 
   if (uri) {
-    // aweme.snssdk.com 实测**明显更稳**（13/16 vs 10/16），所以排前面；
-    // 多写几个 ratio：不同 ratio 会走不同的 CDN 主机，命中"免 Referer"那台的概率更高。
+    // ★ 第一条用**无参数形态** `?video_id=<uri>`。
+    //   为什么放最前：诊断第 11 行那个"真机上确实能播（OK 1280x720）"的探针地址
+    //   用的就是这个形态 —— `https://aweme.snssdk.com/aweme/v1/play/?video_id=<id>`
+    //   （**没有 ratio / line / aid**）。它是唯一在设备上被证明能出画面的形态，
+    //   所以优先复用它，而不是先去试那些"PC 上等效、设备上没验证过"的带参形态。
+    //   实测 PC 上 ratio 不影响落点可用性（§13.9），但设备侧差异一直没定位到，
+    //   所以这里以"设备已验证的形态"为准。
+    push('https://aweme.snssdk.com/aweme/v1/play/?video_id=' + uri);
+    // 其余形态作为轮换：不同 ratio 可能走不同 CDN 主机，命中"能连上"那台的概率更高。
+    // aweme.snssdk.com 实测**明显更稳**（13/16 vs 10/16），所以排前面。
     push('https://aweme.snssdk.com/aweme/v1/play/?video_id=' + uri + '&ratio=720p&line=0');
     push('https://aweme.snssdk.com/aweme/v1/play/?video_id=' + uri + '&ratio=540p&line=0');
     push('https://aweme.snssdk.com/aweme/v1/play/?video_id=' + uri + '&ratio=480p&line=0');

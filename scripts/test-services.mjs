@@ -534,7 +534,7 @@ for (let i = 0; i < 60; i++) many = tt.appendComment(many, 'g', 'c' + i);
 assert(tt.commentsOf(many, 'g').length === 50, '单条目评论上限 50 = ' + tt.commentsOf(many, 'g').length);
 assert(tt.commentsOf(many, 'g')[49].text === 'c59', '保留的是最新 50 条');
 
-// ---- 3s) 播放页必须给"首帧"留足时间（否则会掐掉刚要出画面的视频）----
+// ---- 3s) 首帧等待（"设备侧才看得出来"的教训）----
 // 背景：原生模块的 play() 返回 ok 只代表"输入打开了"，videoW/videoH 要等**解出第一帧**才填。
 // 而 feed 视频码率可达 2864kbps（真机可播的探针视频只有 1291），首帧可能要 1~3 秒。
 // 早前播放页只等 **600ms** 就判"无视频流"并关掉换下一个候选 → 等于在视频刚要出画面时掐掉它。
@@ -777,6 +777,18 @@ assert(new Set(cands).size === cands.length, '候选列表无重复 = ' + cands.
 // 抠不出 video_id 时也不能崩，至少给出原地址
 const noId = np.playUrlCandidates('https://example.com/x.mp4', []);
 assert(noId[0] === 'https://example.com/x.mp4', '无 video_id 时原样返回');
+
+// ★ 候选[0] 必须是**无参数的 `?video_id=<uri>` 形态**。
+// 依据：诊断第 11 行那个"真机上确实能播（OK 1280x720）"的探针地址用的就是这个形态
+// （`https://aweme.snssdk.com/aweme/v1/play/?video_id=<id>`，**没有 ratio/line/aid**）。
+// 它是唯一在设备上被证明能出画面的形态，所以优先复用它，而不是先试"PC 上等效、设备上没验证过"的带参形态。
+{
+  const firstCand = np.playUrlCandidates(playEntry, [])[0];
+  assert(firstCand === 'https://aweme.snssdk.com/aweme/v1/play/?video_id=v0300fg10000daipqp7og65gv96ps050',
+    '候选[0] = 设备已验证的无参形态 = ' + String(firstCand).slice(0, 78));
+  assert(/^https:\/\/aweme\.snssdk\.com\/aweme\/v1\/play\/\?video_id=[^&]+$/.test(firstCand),
+    '候选[0] 不含任何额外参数（ratio/line/aid）');
+}
 
 // ---- 3o) ★ 回归防线：不允许再出现"对视频地址发 GET"的代码 ----
 // 曾经这里有一个 `resolvePlainHttpUrl()`：对视频入口 URL 发 GET、读 302 的 Location
