@@ -158,45 +158,54 @@ export default {
       }
       if (this.controlsVisible) this.syncProgress();
     },
-    // 依次尝试**多个等价播放入口**，直到有一个能播。
-    // 为什么需要：`/aweme/v1/play/` 每次 302 到的 CDN 主机不同，有的要求 Referer（403）、
-    // 有的不要求（200）。重试会重抽落点主机 —— 实测单形态 ~68%，轮换候选可达 100%。
-    // 这样**不需要 PC 中转**也能播抖音 web feed 的视频。
+    // 依次尝试播放入口，直到有一个能播。**三种手段叠用**：
+    //   ① 换 URL 形态（不同 ratio / 不同域名）
+    //   ② **重试同一个入口** —— ★ 实测：同一入口重复请求，**1/3 的情况落点主机会变**
+    //      （例 `v26-cold` → `v96-cold-y`，甚至 `v9-cold-y` → `v95-bjb-mc-cold`）。
+    //      而失败就是"落点在坏主机"（§13.9），所以重试本身就是在重抽主机。
+    //   ③ 坏主机黑名单沉底（orderByHostHealth，在调用方做）
+    //
+    // ⚠️ 更正：之前（§15.8/15.9）我基于**1 条样本**断言"同一 uri 落点主机固定、重试无用"，
+    //    这次用 12 条样本复测发现**4/12 会变** —— 那条结论是样本太小导致的错误，已推翻。
     async startWithFallback(candidates, resumeMs) {
-      // 尝试上限：候选有 8 个，**不要砍太狠**。
-      // ★ PC 实测（20 条真实 uri，按候选顺序逐个试到成功）：
-      //     第 1 个就成功 13/20、前 2 个 14、前 4 个 19、**全部 8 个 = 20/20（100%）**
-      //   → 之前把上限设成 4，等于**自己把 100% 砍到 95%**。
-      //   现在放到 8（全试），由下面的"首帧总预算"控制总耗时，而不是靠砍候选数。
-      const MAX_TRIES = 8;
+      // 候选有 8 个；每个最多试 RETRY_PER_CAND 次（重抽落点主机），总次数设上限。
+      // ★ PC 实测：按候选顺序试到成功，第 1 个就成功 13/20、前 4 个 19/20、全部 8 个 20/20。
+      const MAX_TRIES = 8;          // 候选数上限
+      const RETRY_PER_CAND = 2;     // 每个候选最多试几次（靠重试重抽落点主机）
       const list = (candidates || []).filter(Boolean).slice(0, MAX_TRIES);
       if (!list.length) return false;
-      // 等首帧的**总预算**：单个候选最多 FIRST_FRAME_MS，但所有候选加起来不超过这个数。
-      // 取值依据同上：平均要试 2~3 次才成功，所以给到 20s；最坏情况也不会无限等下去。
-      // 预算耗尽就停（`frameBudgetMs <= 0` 时 break），不再让用户干等。
+      // 等首帧的**总预算**：单个候选最多 FIRST_FRAME_MS，所有尝试加起来不超过这个数。
+      // 预算耗尽就停，不再让用户干等。
       const FIRST_FRAME_MS = 6000;
       let frameBudgetMs = 20000;
       let lastError = '';
+      let attempt = 0;
+      const totalPlan = list.length * RETRY_PER_CAND;
       for (let i = 0; i < list.length; i++) {
-        if (i > 0) {
-          // ★ 重试前必须先把上一次**中止掉**。
-          // 真机实测：上一个入口 open 失败后直接 open 下一个，模块会返回 ok:true
-          // 但 videoW/videoH 为空（屏上显示 `play ok ?x?`）→ 黑屏。
-          // 先 stop 一次把状态清掉，再 open 下一个。
-          this.dbg = '第 ' + (i + 1) + '/' + list.length + ' 个入口重试中（上一个：' + lastError + '）';
-          try { await bridge.stop(); } catch (error) { /* 忽略 */ }
-          await new Promise((resolve) => setTimeout(resolve, 350));
+        for (let k = 0; k < RETRY_PER_CAND; k++) {
+          if (attempt > 0) {
+            // ★ 重试前必须先把上一次**中止掉**。
+            // 真机实测：上一个入口 open 失败后直接 open 下一个，模块会返回 ok:true
+            // 但 videoW/videoH 为空（屏上显示 `play ok ?x?`）→ 黑屏。
+            // 先 stop 一次把状态清掉，再 open 下一个。
+            this.dbg = '第 ' + (attempt + 1) + '/' + totalPlan + ' 次尝试（入口 ' + (i + 1)
+              + (k > 0 ? ' 重试' : '') + '，上一个：' + lastError + '）';
+            try { await bridge.stop(); } catch (error) { /* 忽略 */ }
+            await new Promise((resolve) => setTimeout(resolve, 350));
+          }
+          const waitMs = Math.max(800, Math.min(FIRST_FRAME_MS, frameBudgetMs));
+          this._frameWaitUsed = 0;                 // start() 把实际等了多久写回这里
+          const ok = await this.start(list[i], resumeMs, waitMs);
+          frameBudgetMs -= (this._frameWaitUsed || waitMs);
+          attempt++;
+          if (ok) {
+            if (attempt > 1) this.toast('第 ' + attempt + ' 次尝试播放成功', 2200);
+            return true;
+          }
+          lastError = (this.lastPlayError || '失败');
+          if (frameBudgetMs <= 0) break;            // 预算用完了，别再让用户干等
         }
-        const waitMs = Math.max(800, Math.min(FIRST_FRAME_MS, frameBudgetMs));
-        this._frameWaitUsed = 0;                 // start() 把实际等了多久写回这里
-        const ok = await this.start(list[i], resumeMs, waitMs);
-        frameBudgetMs -= (this._frameWaitUsed || waitMs);
-        if (ok) {
-          if (i > 0) this.toast('已换第 ' + (i + 1) + ' 个入口播放成功', 2200);
-          return true;
-        }
-        lastError = (this.lastPlayError || '失败');
-        if (frameBudgetMs <= 0) break;            // 预算用完了，别再让用户干等
+        if (frameBudgetMs <= 0) break;
       }
       return false;
     },

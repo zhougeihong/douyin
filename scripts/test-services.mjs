@@ -557,6 +557,12 @@ assert(tt.commentsOf(many, 'g')[49].text === 'c59', '保留的是最新 50 条')
   const mt = /const MAX_TRIES = (\d+)/.exec(codeOnly);
   assert(mt && Number(mt[1]) >= 8,
     'MAX_TRIES 不得小于 8（实测全 8 个候选才 100%，前 4 个只有 95%）= ' + (mt && mt[1]));
+  // 必须"重试同一个候选"：实测**同一入口重复请求有 1/3 的情况落点主机会变**
+  // （v26-cold→v96-cold-y、v9-cold-y→v95-bjb-mc-cold…），而失败就是落在坏主机，
+  // 所以重试本身就是在重抽主机。别退回"每个候选只试一次"。
+  const rp = /const RETRY_PER_CAND = (\d+)/.exec(codeOnly);
+  assert(rp && Number(rp[1]) >= 2,
+    'RETRY_PER_CAND 不得小于 2（同入口重试能重抽落点主机）= ' + (rp && rp[1]));
 }
 
 // ---- 3r) 版本号/名称一致性（**防两处漂移**）----
