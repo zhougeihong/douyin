@@ -1549,5 +1549,76 @@ PC 上 17/20 可播、探针 URL 在真机上确实能播、参数完全相同�
 日志面板（网络诊断 24 行、版本号显示 `1.0.2（来源: config.js（权威））`）、
 抖音风图标（左右两侧）全部正常。
 
+### 15.14 ★ 黑屏的重大嫌疑：**播放页太早放弃**（2026-10 本轮）
 
+前面几轮我一直在查"视频本身有什么不同"，全都排除了。这轮换个方向查**播放页自己的判定逻辑**，
+结果找到一个**很可能就是黑屏主因**的设计缺陷。
 
+#### 问题：`play()` 返回 ok ≠ 有画面，而我只等了 600ms
+
+原生模块的 `play()` 返回 `ok:true` 只代表**"输入打开了"**；`videoW/videoH`
+要等**解出第一帧**才会填。而旧代码是这样的：
+
+```js
+// 旧（错）
+if (!w || !h) {
+  await sleep(600);                 // ← 只等 600 毫秒
+  const st = await bridge.status(); // 查一次
+  w = st.videoW; h = st.videoH;
+}
+if (!w || !h) { /* 判定"无视频流" → 关掉，换下一个候选 */ }
+```
+
+**后果**：feed 视频码率可达 **2864 kbps**（真机可播的那个探针视频只有 1291），
+高码率视频初次解码 + 缓冲出首帧**完全可能超过 600ms**。
+于是播放页**在视频刚要出画面的瞬间把它关掉**，转去试下一个入口 ——
+而下一个入口是**同一个视频的不同 URL**，同样会被掐掉。用户看到的就是**稳定黑屏**。
+
+这恰好解释了那个一直矛盾的现象：
+**同一个模块、同一个 TLS、同一个编码，探针能播、feed 全黑** ——
+差别不在视频，而在**这个视频出首帧比 600ms 慢**。
+
+#### 修法：渐进等待 + 总预算
+
+```js
+const TOTAL_MS = Math.max(800, Number(waitMs) || 6000);  // 单个候选最多等 6s
+while ((!w || !h) && waited < TOTAL_MS) {
+  await sleep(400);
+  const st = await bridge.status();     // 轮询，不是查一次
+  if (st.videoW && st.videoH) { w = st.videoW; h = st.videoH; }
+}
+```
+
+- 单个候选取 6s（给高码率视频留足时间），**一旦拿到尺寸立刻继续播**
+- **总预算 `frameBudgetMs = 14000`**：4 个候选加起来不超过 14s，
+  避免一个彻底播不了的视频让用户干等 25 秒
+- 成功路径的屏上诊断改用**轮询到的** `w/h`（`r.videoW` 常为 0，旧代码把它当"没画面"）
+
+#### 诊断也改了：量"出首帧用了多久"
+
+第 11 行现在会报**探针视频出首帧的耗时**，并直接标出是否超过旧的 600ms 线：
+
+```
+11 原生 https 直连播放: OK 1280x720 · 出首帧=XXXms ← **超过旧版 600ms 的判定线**
+```
+
+**如果真机上这一行显示 >600ms，就证实了本轮的判断。**
+
+#### 顺手查清的另一个疑问
+
+`libjsapi_better_video.so` 只有 **53KB**，一度让人怀疑它是不是空壳。解析它的
+DT_NEEDED 后确认：它是**薄包装层**，真正干活的是固件里的系统库 ——
+`libavcodec.so.58` / `libavformat.so.58` / `libavutil.so.56` / `libswscale.so.5` /
+`libswresample.so.3` / `libasound.so.2`（**包内不带，靠固件**）。
+它的错误词表是 `stream-info-failed` / `fb0-open-failed` / `fb-mmap-failed`，
+走 `avformat_open_input` → `avformat_find_stream_info` 标准流程；
+诊断第 8 行报"可用"+第 11 行能播，说明设备上这些库齐全。
+
+#### 回归防线（4 条）
+
+`test-services.mjs` 里新增断言，把这个教训钉死：
+必须有 `FIRST_FRAME_MS`、必须是 `while (waited < TOTAL_MS)` 轮询、
+轮询里要调 `bridge.status()`、**不得再出现 `setTimeout(…, 600)` 那种一次判定**、
+必须有 `frameBudgetMs` 总预算。
+
+`npm test` → **202 PASS / 0 FAIL**。

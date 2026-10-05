@@ -430,7 +430,7 @@ import { jsapiHttpRequest, previewPayload, storageSelfCheck } from '../../servic
 import { videoCapsText } from '../../services/video-caps.js';
 import { loadCookies, cookieSummary, hasLoginCookie, cookieCount, clearCookies, saveCookiesFromText, inspectRawForCookies } from '../../services/session-cookies.js';
 import { fetchItemInfo } from '../../services/douyin-api.js';
-import { available as nativeVideoAvailable, playUrlCandidates, badHostList, probeCandidatesViaRelay, relayPlayableUrl, play as nativePlay, stop as nativeStop } from '../../services/native-player.js';
+import { available as nativeVideoAvailable, playUrlCandidates, badHostList, probeCandidatesViaRelay, relayPlayableUrl, play as nativePlay, stop as nativeStop, status as nativeStatus } from '../../services/native-player.js';
 import { setPendingPlay } from '../../services/play-request.js';
 import { API_RELAY, DOUYIN_HOT_FEED_API, APP_VERSION } from '../../config.js';
 import { icon } from '../../assets/icons.js';
@@ -1320,9 +1320,23 @@ export default {
           rate: 1,
           volume: 0
         });
-        this.probeVideoOk = !!(pr && pr.ok && pr.videoW && pr.videoH);
+        // 量一下"从 play() 返回到出首帧"要多久：如果连这个**能播**的探针都要 >600ms，
+        // 那旧播放页"只等 600ms 就判死"就是黑屏的直接原因（高码率视频更慢）。
+        let pW = Number(pr && pr.videoW) || 0;
+        let pH = Number(pr && pr.videoH) || 0;
+        let waited = 0;
+        while ((!pW || !pH) && waited < 8000) {
+          await new Promise((r2) => setTimeout(r2, 300));
+          waited += 300;
+          try {
+            const st = await nativeStatus();
+            if (st && st.videoW && st.videoH) { pW = st.videoW; pH = st.videoH; }
+          } catch (error) { /* 继续等 */ }
+        }
+        this.probeVideoOk = !!(pr && pr.ok && pW && pH);
         steps.push('11 原生 https 直连播放: ' + (pr && pr.ok
-          ? ('OK ' + (pr.videoW || '?') + 'x' + (pr.videoH || '?') + ' → 固件 FFmpeg 自带 TLS，无需中转')
+          ? ('OK ' + (pW || '?') + 'x' + (pH || '?') + ' · 出首帧=' + waited + 'ms'
+            + (waited > 600 ? ' ← **超过旧版 600ms 的判定线**' : ''))
           : ('失败 ' + ((pr && pr.error) || '未知'))));
         try { await nativeStop(); } catch (error) { /* 忽略 */ }
       } catch (error) {

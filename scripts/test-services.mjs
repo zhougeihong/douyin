@@ -534,6 +534,26 @@ for (let i = 0; i < 60; i++) many = tt.appendComment(many, 'g', 'c' + i);
 assert(tt.commentsOf(many, 'g').length === 50, '单条目评论上限 50 = ' + tt.commentsOf(many, 'g').length);
 assert(tt.commentsOf(many, 'g')[49].text === 'c59', '保留的是最新 50 条');
 
+// ---- 3s) 播放页必须给"首帧"留足时间（否则会掐掉刚要出画面的视频）----
+// 背景：原生模块的 play() 返回 ok 只代表"输入打开了"，videoW/videoH 要等**解出第一帧**才填。
+// 而 feed 视频码率可达 2864kbps（真机可播的探针视频只有 1291），首帧可能要 1~3 秒。
+// 早前播放页只等 **600ms** 就判"无视频流"并关掉换下一个候选 → 等于在视频刚要出画面时掐掉它。
+// 这条断言把这个教训钉住：必须是**轮询等待**，且不许退回几百毫秒的固定等待。
+{
+  const pv = fs.readFileSync(path.join(root, 'src', 'pages', 'player', 'player.vue'), 'utf8');
+  const codeOnly = pv.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert(/FIRST_FRAME_MS/.test(codeOnly), '播放页有首帧等待上限常量 FIRST_FRAME_MS');
+  // 注意：条件里有嵌套括号 `while ((!w || !h) && waited < TOTAL_MS)`，
+  // 所以不能用 `[^)]*`（会在内层 `)` 处截断）—— 用 `[^;{]*`。
+  assert(/while\s*\([^;{]*waited\s*<\s*TOTAL_MS/.test(codeOnly.replace(/\s+/g, ' ')),
+    '首帧是**轮询**等待（while + waited < TOTAL_MS）');
+  assert(/bridge\.status\(\)/.test(codeOnly), '轮询里用 status() 复查几何');
+  assert(!/setTimeout\([^)]*,\s*600\s*\)/.test(codeOnly),
+    '不得退回"只等 600ms 一次就判死"的写法');
+  assert(/frameBudgetMs/.test(codeOnly),
+    '有首帧等待的**总预算**（避免多候选累计让用户干等 25 秒）');
+}
+
 // ---- 3r) 版本号/名称一致性（**防两处漂移**）----
 // 背景：真机排查第一件事是"装的是哪个包"，而运行时读不到可靠版本
 //（$falcon.__AppClazz.meta.version 等实测全取不到），早前模板还硬编码回退成 '1.0.0'，

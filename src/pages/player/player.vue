@@ -168,6 +168,10 @@ export default {
       const MAX_TRIES = 4;
       const list = (candidates || []).filter(Boolean).slice(0, MAX_TRIES);
       if (!list.length) return false;
+      // 等首帧的**总预算**：单个候选最多 FIRST_FRAME_MS，但所有候选加起来不超过这个数，
+      // 否则一个彻底播不了的视频会让用户干等 25 秒（4 × 6s）。
+      const FIRST_FRAME_MS = 6000;
+      let frameBudgetMs = 14000;
       let lastError = '';
       for (let i = 0; i < list.length; i++) {
         if (i > 0) {
@@ -179,16 +183,20 @@ export default {
           try { await bridge.stop(); } catch (error) { /* 忽略 */ }
           await new Promise((resolve) => setTimeout(resolve, 350));
         }
-        const ok = await this.start(list[i], resumeMs);
+        const waitMs = Math.max(800, Math.min(FIRST_FRAME_MS, frameBudgetMs));
+        this._frameWaitUsed = 0;                 // start() 把实际等了多久写回这里
+        const ok = await this.start(list[i], resumeMs, waitMs);
+        frameBudgetMs -= (this._frameWaitUsed || waitMs);
         if (ok) {
           if (i > 0) this.toast('已换第 ' + (i + 1) + ' 个入口播放成功', 2200);
           return true;
         }
         lastError = (this.lastPlayError || '失败');
+        if (frameBudgetMs <= 0) break;            // 预算用完了，别再让用户干等
       }
       return false;
     },
-    async start(path, resumeMs) {
+    async start(path, resumeMs, waitMs) {
       this.path = path;
       const r = await bridge.play({
         path: path,
@@ -213,21 +221,39 @@ export default {
         // 全部试完才提示（否则重试过程中会闪一堆失败提示）。
         return false;
       }
-      // 模块报 ok 但**探不出视频尺寸** = 这个地址其实播不了（真机实测屏上显示 `play ok ?x?` 且黑屏）。
-      // 但原生模块有可能要过一小会儿才把几何填好，所以先等一拍再复查一次，
-      // 仍然没有尺寸才当软失败交给下一个入口。
+      // ★★ 模块报 ok 但尺寸还没填 —— **不能立刻判死**。
+      //
+      // 为什么（这是黑屏的一个很可能的原因）：
+      //   `play()` 返回 ok 只代表"输入打开了"，几何要等**解出第一帧**才填。
+      //   而 feed 视频的码率可以到 2864 kbps（真机可播的那个探针视频只有 1291），
+      //   高码率的初次解码 + 缓冲完全可能要 1~3 秒。
+      //   早前这里只等 **600ms 就判"无视频流"并关掉换下一个候选** ——
+      //   等于**在视频刚要出画面的瞬间把它掐掉**，于是用户看到的一直是黑屏。
+      //
+      // 现在改成**渐进等待**：轮询 status()，最多等 waitMs，期间一旦拿到尺寸就继续播。
+      // 只有全程都拿不到尺寸，才认为这个入口真的不行、交给下一个候选。
+      const TOTAL_MS = Math.max(800, Number(waitMs) || 6000);
+      const STEP_MS = 400;
       let w = Number(r.videoW) || 0;
       let h = Number(r.videoH) || 0;
-      if (!w || !h) {
-        await new Promise((resolve) => setTimeout(resolve, 600));
+      let waited = 0;
+      while ((!w || !h) && waited < TOTAL_MS) {
+        await new Promise((resolve) => setTimeout(resolve, STEP_MS));
+        waited += STEP_MS;
         try {
           const st = await bridge.status();
-          w = Number(st && st.videoW) || w;
-          h = Number(st && st.videoH) || h;
-        } catch (error) { /* 探测失败就按没有尺寸处理 */ }
+          const sw = Number(st && st.videoW) || 0;
+          const sh = Number(st && st.videoH) || 0;
+          if (sw && sh) { w = sw; h = sh; }
+          // 模块自己说没在播且也没尺寸 → 不用再等
+          if (!sw && !sh && st && st.playing === false && st.eos === true) break;
+        } catch (error) { /* 探测失败继续等 */ }
+        // 屏上诊断能看到等待进度，便于判断"是不是等得不够久"
+        this.dbg = '等首帧 ' + waited + 'ms' + (w ? (' → ' + w + 'x' + h) : '') + ' | ' + this.dbgBase;
       }
       if (!w || !h) {
-        this.lastPlayError = '模块已打开但无视频流（可能不是可播地址）';
+        this._frameWaitUsed = waited;
+        this.lastPlayError = '等 ' + TOTAL_MS + 'ms 仍未出首帧（模块已打开但无视频流）';
         this.playing = false;
         this.dbg = 'play SOFT-FAIL: ' + this.lastPlayError + ' | ' + this.dbgBase;
         // 记住这台落点主机不好使，下次同类候选沉底（坏主机是主机级问题）
@@ -235,16 +261,19 @@ export default {
         return false;
       }
       this.lastPlayError = '';
-      this.dbgBase = this.screenInfo + ' | play ok ' + ((r && r.videoW) || '?') + 'x' + ((r && r.videoH) || '?')
+      this._frameWaitUsed = waited;
+      // 注意：屏上诊断要用**轮询到的** w/h，而不是 play() 当场返回的 r.videoW/H
+      // （后者常常是 0 —— 几何还没填，这正是过去被误判成"无视频流"的原因）。
+      this.dbgBase = this.screenInfo + ' | play ok ' + w + 'x' + h + ' (首帧 ' + waited + 'ms)'
         + ' rate=' + this.rate + ' vol=' + this.volume;
       this.dbg = this.dbgBase;
       this.errorText = '';
       this.playing = true;
       if (r.durationMs > 0) this.durationMs = r.durationMs;
       // 分辨率超出屏幕时原生已按 maxW/maxH 降到屏内，这里只做提示
-      if (r.videoW > bridge.SCREEN_W || r.videoH > bridge.SCREEN_H) {
+      if (w > bridge.SCREEN_W || h > bridge.SCREEN_H) {
         this.qualityLabel = '已降到流畅画质';
-        this.toast('原片 ' + r.videoW + '×' + r.videoH + '，已降到流畅画质', 2600);
+        this.toast('原片 ' + w + '×' + h + '，已降到流畅画质', 2600);
       } else {
         this.qualityLabel = '';
       }
