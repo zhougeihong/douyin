@@ -378,7 +378,7 @@ import { jsapiHttpRequest, previewPayload, storageSelfCheck } from '../../servic
 import { videoCapsText } from '../../services/video-caps.js';
 import { loadCookies, cookieSummary, hasLoginCookie, cookieCount, clearCookies, saveCookiesFromText, inspectRawForCookies } from '../../services/session-cookies.js';
 import { fetchItemInfo } from '../../services/douyin-api.js';
-import { available as nativeVideoAvailable, nativePlayableUrl, playUrlCandidates, badHostList, probeCandidatesViaRelay, play as nativePlay, stop as nativeStop } from '../../services/native-player.js';
+import { available as nativeVideoAvailable, nativePlayableUrl, playUrlCandidates, badHostList, probeCandidatesViaRelay, relayPlayableUrl, play as nativePlay, stop as nativeStop } from '../../services/native-player.js';
 import { setPendingPlay } from '../../services/play-request.js';
 import { API_RELAY, DOUYIN_HOT_FEED_API } from '../../config.js';
 
@@ -1162,8 +1162,9 @@ export default {
 
       // 11) 原生 https 直连播放测试：固件 FFmpeg 若自带 TLS，就完全不用中转（也不需要登录）
       //     用一个固定的公开视频 id 直接试播；会短暂占用屏幕（原生绘制在 fb 上），随后 stop。
+      const PROBE_URL = 'https://aweme.snssdk.com/aweme/v1/play/?video_id=v0d00fg10000crr51nvog65hoikd5f6g';
       try {
-        const probeUrl = 'https://aweme.snssdk.com/aweme/v1/play/?video_id=v0d00fg10000crr51nvog65hoikd5f6g';
+        const probeUrl = PROBE_URL;
         const pr = await nativePlay({
           path: probeUrl,
           screenW: 800,
@@ -1184,6 +1185,40 @@ export default {
       } catch (error) {
         steps.push('11 原生 https 直连播放: 异常 ' + ((error && error.message) || ''));
       }
+
+      // 12) ★★ 关键对照：用**完全相同的方式**去播 feed 里的第一条视频。
+      //     为什么必须做：第 11 行证明"原生模块 + TLS"是好的（那个固定 id 能播），
+      //     但 feed 的视频全部黑屏。两者差别只能在"具体地址/字节流"上。
+      //     这一步把结论收敛成两种，之后不用再猜：
+      //       · 这里也 OK  → 模块与网络都没问题，问题在"播放页的调度/参数"
+      //       · 这里失败   → 问题在这些具体地址（再看下面 13/14 行的探测结果）
+      try {
+        const first = this.list[0];
+        const firstUrl = first && first.playUrl;
+        if (!firstUrl) {
+          steps.push('12 feed 首条实播: 首条还没有播放地址（等列表加载完再测）');
+        } else {
+          const cand = playUrlCandidates(firstUrl, []);
+          const tryUrl = (cand && cand[0]) || firstUrl;
+          steps.push('12 feed 首条实播: 用 ' + String(tryUrl).replace(/^https?:\/\//, '').slice(0, 46) + '…');
+          const fr = await nativePlay({
+            path: tryUrl,
+            screenW: 800, screenH: 254,
+            rectX: 0, rectY: 0, rectW: 800, rectH: 254,
+            maxW: 800, maxH: 254, rate: 1, volume: 0
+          });
+          if (fr && fr.ok) {
+            const hasSize = !!(fr.videoW && fr.videoH);
+            steps.push('12 feed 首条实播: ok=' + fr.videoW + 'x' + fr.videoH
+              + (hasSize ? ' → 能播' : ' → **打开了但无视频流**（就是黑屏的那种）'));
+          } else {
+            steps.push('12 feed 首条实播: 失败 ' + ((fr && fr.error) || '未知'));
+          }
+          try { await nativeStop(); } catch (error) { /* 忽略 */ }
+        }
+      } catch (error) {
+        steps.push('12 feed 首条实播: 异常 ' + ((error && error.message) || ''));
+      }
       // 12) 首条条目状态 + 上次解析结果：定位“解析成功但界面没反应”
       try {
         const first = this.list[0] || {};
@@ -1197,15 +1232,14 @@ export default {
         steps.push('12 首条: 检测失败 ' + ((error && error.message) || ''));
       }
 
-      // 13) 播放候选 + **中转可达性探测**。
-      //     ⛔ 历史上这里用 JS 的 http 通道直接 GET 候选地址 —— 那等于把视频二进制灌进
-      //     原生字符串通道，真机上**导致词典笔软重启**（HANDOFF §9）。**绝不能再那样做**。
-      //     ✅ 现在改成让 **PC 中转**去试（relay 的 &probe=1 端点），设备只读几十字节 JSON。
-      //     为什么需要探测：实测抖音会把视频解析到**已坏的 CDN 主机**（DNS 永久 ENOTFOUND），
-      //     且**同一 uri 的落点主机是固定的**（连续 6 次都一样）→ 多入口轮换救不了它，
-      //     只能提前剔除。详见 HANDOFF §15.8。
+      // 13/14) 候选 + **中转探测**：让 PC 中转去试，回报"能不能连上 / HTTP 状态 / 是不是视频"。
+      //     ⛔ 设备端**绝不能自己 GET 视频地址**（二进制灌进原生字符串通道 → 词典笔软重启，
+      //     见 HANDOFF §9/§13.10）。所以这一步只读中转回的几十字节 JSON。
+      //     探测**同时**对"直连地址"和"套了中转的地址"各做一次，用来分辨失败在哪一层。
       try {
-        const cand = playUrlCandidates((this.list[0] && this.list[0].playUrl) || '', []);
+        const first = this.list[0];
+        const firstUrl = (first && first.playUrl) || '';
+        const cand = playUrlCandidates(firstUrl, []);
         const bad = badHostList();
         steps.push('13 播放候选: ' + cand.length + ' 个'
           + (cand.length ? '（首个 ' + String(cand[0]).replace(/^https?:\/\//, '').slice(0, 34) + '）' : '（首条还没有播放地址）')
@@ -1214,18 +1248,44 @@ export default {
         if (!cand.length) {
           steps.push('14 中转探测: 无候选可探');
         } else {
-          const probed = await probeCandidatesViaRelay(cand, { limit: 4, timeoutMs: 9000 });
-          if (!probed) {
-            steps.push('14 中转探测: 未启用（API_RELAY 为空）或全部不可探');
+          // ① 探"不套中转的原始入口"：中转会自己去连，回报落点状态
+          const raw = await probeCandidatesViaRelay([cand[0]], { limit: 1, timeoutMs: 9000 });
+          if (!raw) {
+            steps.push('14 探测(直连入口): 未启用中转（API_RELAY 为空）或探测失败');
+          } else if (raw.good.length) {
+            steps.push('14 探测(直连入口): 可达 ✅');
           } else {
-            steps.push('14 中转探测: ' + probed.good.length + ' 个可达 · ' + probed.bad.length + ' 个连不上');
-            // 把坏的挑出来单独一行，指明是哪台主机坏了（这是能直接指导修复的信息）
-            probed.bad.slice(0, 3).forEach((b, i) => {
-              let host = '';
-              const m = /^https?:\/\/([^/?#]+)/i.exec(String(b.url || ''));
-              if (m) host = m[1];
-              steps.push('14 坏入口' + (i + 1) + ': ' + host + ' → ' + String(b.error || '').slice(0, 46));
-            });
+            const b = raw.bad[0] || {};
+            let host = '';
+            const m = /^https?:\/\/([^/?#]+)/i.exec(String(b.url || ''));
+            if (m) host = m[1];
+            steps.push('14 探测(直连入口): **连不上** ❌ host=' + host + ' · ' + String(b.error || '').slice(0, 40));
+          }
+          // ② 探"套了中转的地址"：这是设备实际会用的播放路径（中转补 Referer 并跟 302）
+          const relayed = relayPlayableUrl(cand[0]);
+          if (relayed) {
+            const viaRelay = await probeCandidatesViaRelay([relayed], { limit: 1, timeoutMs: 9000 });
+            if (viaRelay && viaRelay.good.length) {
+              steps.push('14 探测(经中转): 可达 ✅ → 走中转能播，直连不通');
+            } else if (viaRelay) {
+              const b = viaRelay.bad[0] || {};
+              steps.push('14 探测(经中转): **连不上** ❌ ' + String(b.error || '').slice(0, 46));
+            }
+          } else {
+            steps.push('14 探测(经中转): 未启用中转（API_RELAY 为空）');
+          }
+
+          // ③ 探测自身的自检：用一个**已知能播**的固定地址探一次。
+          //    为什么要有它：探测若因为"中转地址没配对"而静默返回 null，前面两行都只会
+          //    显示"未启用/探测失败"，分不清是"入口坏"还是"探测根本没工作"。
+          //    这一行能把两者分开：自检 OK 说明探测链路是通的，前面报的就是真实结论。
+          const selfTest = await probeCandidatesViaRelay([PROBE_URL], { limit: 1, timeoutMs: 9000 });
+          if (!selfTest) {
+            steps.push('15 探测自检: **探测没工作**（中转地址未生效）→ 14 行的结论不可信');
+          } else if (selfTest.good.length) {
+            steps.push('15 探测自检: OK ✅（探测链路正常，14 行的结论可信）');
+          } else {
+            steps.push('15 探测自检: 已知能播的地址也探不通 → 问题在中转/探测本身，不是视频');
           }
         }
       } catch (error) {
