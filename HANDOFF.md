@@ -24,7 +24,7 @@
 
 ### 0.2 测试真实状态
 
-- `node scripts/test-services.mjs` → **185 PASS / 0 FAIL**（Node 16 与"模拟 Node≥18 fetcsh"两种环境连跑多次一致）。
+- `node scripts/test-services.mjs` → **202 PASS / 0 FAIL**（Node 16 与"模拟 Node≥18 fetch"两种环境都通过）。
 - **PASS 数会 ±几点浮动，这是设计如此、不是回归**：凡依赖第三方接口当时可用性的断言
   一律用 **NOTE**（不 FAIL）。接口抖动时某条从 PASS 变 NOTE，总数就动一下 ——
   **判断标准是 `FAIL = 0` 且退出码 0，不是 PASS 数恒定**。
