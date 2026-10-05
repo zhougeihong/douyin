@@ -173,7 +173,7 @@
 
     <scroller class="subpage" v-if="dockIdx === 4" show-scrollbar="false">
       <text class="page-heading">我的主页</text>
-      <text class="profile-version">v{{ appVersion || '1.0.0' }}{{ API_RELAY ? ' · 中转模式' : ' · 直连模式' }}</text>
+      <text class="profile-version">v{{ appVersion || '未知版本' }}{{ API_RELAY ? ' · 中转模式' : ' · 直连模式' }}</text>
       <div class="profile-history-btn" @click="runNetDiag">
         <text class="profile-history-txt">网络诊断{{ netDiagRunning ? '（运行中…）' : '' }}</text>
         <text class="profile-history-arrow">›</text>
@@ -380,7 +380,7 @@ import { loadCookies, cookieSummary, hasLoginCookie, cookieCount, clearCookies, 
 import { fetchItemInfo } from '../../services/douyin-api.js';
 import { available as nativeVideoAvailable, nativePlayableUrl, playUrlCandidates, badHostList, probeCandidatesViaRelay, relayPlayableUrl, play as nativePlay, stop as nativeStop } from '../../services/native-player.js';
 import { setPendingPlay } from '../../services/play-request.js';
-import { API_RELAY, DOUYIN_HOT_FEED_API } from '../../config.js';
+import { API_RELAY, DOUYIN_HOT_FEED_API, APP_VERSION } from '../../config.js';
 
 // 设备屏是**逻辑横屏 800×254**（物理 254×800，运行时 direction=270）。
 // 之前按竖屏 254×800 写的滑动距离/尺寸在笔上是错的，这里统一按横屏。
@@ -512,12 +512,45 @@ export default {
       return map[this.loginStatus] || '';
     },
     appVersion() {
+      // 目标：**必须能可靠报出真实版本号**。
+      // 为什么重要：真机排查时"用户装的是哪个包"是第一件事。
+      // 早前这里只试 `$falcon.__AppClazz.meta.version`，取不到就返回 ''，
+      // 模板再回退成硬编码 '1.0.0' → **装了新包也显示 1.0.0**（真机踩过，误事）。
+      // 现在**首选 config.js 里的权威常量**（和 package.json 同步维护），
+      // 运行时那几处只作为兜底。
+      if (APP_VERSION) return APP_VERSION;
       try {
         if (typeof $falcon !== 'undefined' && $falcon && $falcon.__AppClazz && $falcon.__AppClazz.meta) {
-          return $falcon.__AppClazz.meta.version || '';
+          const v = $falcon.__AppClazz.meta.version;
+          if (v) return String(v);
         }
-      } catch (error) { /* 忽略 */ }
+      } catch (error) { /* 继续试下一个来源 */ }
+      try {
+        if (typeof $falcon !== 'undefined' && $falcon && $falcon.__AppInfo) {
+          const v = $falcon.__AppInfo.version || ($falcon.__AppInfo.meta && $falcon.__AppInfo.meta.version);
+          if (v) return String(v);
+        }
+      } catch (error) { /* 继续 */ }
+      try {
+        const app = (typeof getApp === 'function') ? getApp() : null;
+        if (app && app.meta && app.meta.version) return String(app.meta.version);
+      } catch (error) { /* 继续 */ }
       return '';
+    },
+    // 版本号的来源（诊断用）：让"读不到版本"这件事本身可见，而不是悄悄回退
+    appVersionSource() {
+      if (APP_VERSION) return 'config.js（权威）';
+      try {
+        if (typeof $falcon !== 'undefined' && $falcon && $falcon.__AppClazz && $falcon.__AppClazz.meta
+          && $falcon.__AppClazz.meta.version) return 'AppClazz.meta';
+      } catch (error) { /* 忽略 */ }
+      try {
+        if (typeof $falcon !== 'undefined' && $falcon && $falcon.__AppInfo) return '__AppInfo';
+      } catch (error) { /* 忽略 */ }
+      try {
+        if (typeof getApp === 'function' && getApp() && getApp().meta) return 'getApp().meta';
+      } catch (error) { /* 忽略 */ }
+      return '读不到（显示的是回退值，不代表真实版本）';
     },
     // 登录态 Cookie 一行摘要（依赖 this.cookieText 以便登录后自动刷新）
     cookieLine() {
@@ -1122,7 +1155,7 @@ export default {
         steps.push('3 数据链路失败: ' + ((error && error.message) || ''));
       }
 
-      steps.push('4 应用版本: ' + (this.appVersion || '未知'));
+      steps.push('4 应用版本: ' + (this.appVersion || '未知') + '（来源: ' + this.appVersionSource + '）');
       steps.push('5 视频组件: ' + videoCapsText());
 
       // 6) 登录态与 Cookie：登录态数据全靠 Cookie，设备端读不到响应头时需要 LOGIN_HELPER

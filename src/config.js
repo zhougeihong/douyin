@@ -9,6 +9,15 @@
 //    执行 `npm run ttwid` 重新注册并自动更新）
 // 也可改用自建解析实例（Douyin_TikTok_Download_API 等），配置后优先走它。
 
+// ★ 应用版本与名称：**必须和 package.json 保持一致**（改版本时两处一起改）。
+// 为什么要写在这里：真机排查第一件事是"用户装的是哪个包"，而运行时**读不到**可靠的
+// 版本来源 —— `$falcon.__AppClazz.meta.version` / `__AppInfo` / `getApp()` 在模拟器上
+// 全部取不到（实测显示"未知版本"），模板早前还硬编码回退成 '1.0.0'，
+// 结果**装了新包也显示 1.0.0，无法判断版本**（真机上踩过，误事）。
+// 所以这里放一份权威常量，页面直接用它。
+export const APP_NAME = '字节全家桶';
+export const APP_VERSION = '1.0.2';
+
 // 主数据源：抖音热榜（含封面）
 export const DOUYIN_HOT_FEED_API = 'https://60s-api.viki.moe/v2/douyin';
 

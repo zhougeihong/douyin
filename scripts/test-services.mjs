@@ -534,6 +534,26 @@ for (let i = 0; i < 60; i++) many = tt.appendComment(many, 'g', 'c' + i);
 assert(tt.commentsOf(many, 'g').length === 50, '单条目评论上限 50 = ' + tt.commentsOf(many, 'g').length);
 assert(tt.commentsOf(many, 'g')[49].text === 'c59', '保留的是最新 50 条');
 
+// ---- 3r) 版本号/名称一致性（**防两处漂移**）----
+// 背景：真机排查第一件事是"装的是哪个包"，而运行时读不到可靠版本
+//（$falcon.__AppClazz.meta.version 等实测全取不到），早前模板还硬编码回退成 '1.0.0'，
+// 导致**装了新包也显示 1.0.0**。现在 config.js 里放权威常量，页面直接用它，
+// 所以必须和 package.json 同步 —— 用断言把这条钉死，改版本时忘了改一处就会红。
+{
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const cfgSrc = fs.readFileSync(path.join(root, 'src', 'config.js'), 'utf8');
+  const vm = /export const APP_VERSION = '([^']+)'/.exec(cfgSrc);
+  const nm = /export const APP_NAME = '([^']+)'/.exec(cfgSrc);
+  assert(!!vm && !!nm, 'config.js 里有 APP_VERSION / APP_NAME 常量');
+  assert(vm && vm[1] === pkg.version,
+    'config.js 的 APP_VERSION 与 package.json 一致（' + (vm && vm[1]) + ' vs ' + pkg.version + '）');
+  assert(nm && nm[1] === pkg.name,
+    'config.js 的 APP_NAME 与 package.json 一致（' + (nm && nm[1]) + ' vs ' + pkg.name + '）');
+  // 产物文件名也要跟版本对上（真机靠它认包）
+  assert(pkg.version === '1.0.2',
+    'package.json 版本符合预期（当前 ' + pkg.version + '，若是主动升版本请同步改这条断言）');
+}
+
 // ---- 3q) 番茄小说数据层（src/services/fanqie-api.js）----
 // 关键实测：正文有**字体反爬**（PUA 私用区码点），且**部分章服务端只回占位（约 24 字）**。
 // 这里用固定样本把解析/掩码/本地书架逻辑钉住，不依赖网络（真接口联调见 .temp/fanqie-live-check.mjs）
