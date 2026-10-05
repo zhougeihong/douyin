@@ -1,0 +1,32 @@
+# ===== 构建产物 =====
+# .amr 是打包产物（每个约 6MB），不要入库；需要时用 `npm run build` 重新生成
+*.amr
+.falcon_/
+.falcon_tmp/
+dist/
+
+# ===== 依赖 =====
+node_modules/
+
+# ===== 临时/中间产物 =====
+# .temp/ 约 70MB，其中 .temp/apk/ 是 myDV APK 的解包结果（21MB，**含字节私有 SDK**）。
+# HANDOFF §9 明确提醒 abogus/bdms 属"灰色地带，别商用/分发"——
+# 所以这堆解包产物**绝不能提交**。
+.temp/
+
+# ===== 原生二进制 =====
+# libjsapi_better_video.so 是随包发布的原生模块（armv7），体积大且属于第三方产物。
+# 需要时从发布包/libs 取，不入库。
+libs/*.so
+
+# ===== 编辑器/系统 =====
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ===== 日志 =====
+*.log
+npm-debug.log*
+yarn-error.log*
