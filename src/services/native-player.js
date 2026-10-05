@@ -224,39 +224,14 @@ export function playUrlCandidates(url, candidates) {
   return out;
 }
 
-// 单值版本（兼容既有调用方）：返回**第一个**候选
-export function nativePlayableUrl(url, candidates) {
-  const raw = String(url || '');
-
-  // ① 302 跳板入口：优先给「免中转候选序列」的第一个
-  if (needsRelay(raw)) {
-    // 没配中转时，用轮换候选；配了中转则把中转放最前（最稳）
-    const list = playUrlCandidates(raw, candidates);
-    const relayed = relayPlayableUrl(raw);
-    if (relayed) return relayed;
-    return list[0] || raw;
-  }
-
-  const list = [raw].concat(Array.isArray(candidates) ? candidates.map(String) : []).filter(Boolean);
-
-  // ② 直链 CDN：免中转（换明文 http）
-  const direct = list.find(isDirectCdn);
-  if (direct) return direct.replace(/^https:/i, 'http:');
-
-  // ③ 普通 https：配了中转就过中转
-  const relay = VIDEO_RELAY || API_RELAY;
-  if (relay && /^https:\/\//i.test(raw)) {
-    return relay.replace(/\/$/, '') + '/relay?url=' + encodeURIComponent(raw);
-  }
-  return raw;
-}
-
-function isDirectCdn(url) {
-  const text = String(url || '');
-  if (!/^https?:\/\//i.test(text)) return false;
-  if (text.indexOf('/aweme/v1/play') >= 0) return false;
-  return /douyinvod|douyinpic|bytecdn|pstatp|amemv|snssdk|bytedance|ixigua|zjcdn|byteimg/i.test(text);
-}
+// ★ 这里原本还有 `nativePlayableUrl(url, candidates)`（"单值版"，返回第一个候选）。
+//   **2026-10 已删除**，原因（两处都是真 bug，别再写回来）：
+//     ① 它会优先挑 `play_addr.url_list` 里的**直链 CDN**（`isDirectCdn`）——
+//        而 HANDOFF §13.2 实测那些直链**恒 403**（`douyin-api.js` 里自己都写了这条警告）；
+//     ② 它把挑中的地址 `replace(/^https:/i,'http:')` **改写成明文 http** ——
+//        那是"模块没有 TLS"的旧前提，早已被真机诊断推翻（§13.7 `OK 1280x720`）。
+//   两者叠加会把好好的跳板入口换成打不开的地址。
+//   现在**选地址的职责只有一处**：`playUrlCandidates()`（多候选）+ 播放页 `startWithFallback()`。
 
 export async function play(opt) {
   const mod = await api();
@@ -338,7 +313,7 @@ export async function status() {
 
 export default {
   available, play, pause, resume, stop, seek, setRate, setVolume, setView,
-  position, duration, status, nativePlayableUrl, playUrlCandidates,
+  position, duration, status, playUrlCandidates,
   orderByHostHealth, markHostBad, isHostBad, badHostList, probeCandidatesViaRelay,
   SCREEN_W, SCREEN_H
 };

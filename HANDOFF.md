@@ -1440,5 +1440,60 @@ export const APP_VERSION = '1.0.2';
 （§9.3 早有记录：自用研究可以，别商用/分发）。**本工程没有引入它们**，也不建议引入 ——
 播放链路用不上。
 
+### 15.12 ★ 播放链路的系统性审查（用户建议，**查出一个真 bug**）
+
+用户建议"把播放相关的文件检查一下"。系统读了一遍
+`native-player.js` / `video.js` / `douyin-api.js` / `play-request.js` / `player.vue`，
+**查出两类真问题**。
+
+#### 🔴 真 bug：`nativePlayableUrl()` 会把好地址换成打不开的地址（**已删除**）
+
+`douyin.vue` 打开视频时是这么取地址的：
+
+```js
+const url = nativePlayableUrl(item.playUrl, item.playCandidates);   // ← 单个地址
+$falcon.navTo('player', { path: url, ... });
+```
+
+而 `nativePlayableUrl()` 内部有**两个错**（都在它自己的注释上方写着"不要这么做"）：
+
+| 错 | 代码 | 为什么错 |
+|---|---|---|
+| ① 优先挑直链 CDN | `list.find(isDirectCdn)` | HANDOFF §13.2 实测那些直链**恒 403**；`douyin-api.js` 里甚至专门写了注释警告"塞直链会让 nativePlayableUrl 选中 403 地址" |
+| ② 把 https 改写成明文 http | `direct.replace(/^https:/i,'http:')` | "模块没有 TLS"的旧前提，**已被真机诊断推翻**（§13.7 `OK 1280x720`）—— 与我在 §15.1 删掉的 `resolvePlainHttpUrl` 是**同一个错** |
+
+**影响**：分享页解析 / 导入视频这类会给 `playCandidates` 带直链的条目，
+会被换成一个 **403 且明文 http** 的地址；而播放页只用传进去的 `path` 去算候选，
+所以**这条路径上必黑屏**。
+
+**修法**：删掉 `nativePlayableUrl()` 与 `isDirectCdn()`，`douyin.vue` 改为把
+**原始 `playUrl` + `candidates` 整体**交给播放页，由 `startWithFallback()` 按序试
+（那才是 §13.5 验证过 22/22 的路）。**选地址的职责从此只有一处。**
+
+**回归防线**（3 条）：
+- `nativePlayableUrl` 不得再导出
+- `native-player.js` 里不得出现 `isDirectCdn`、不得出现把 `https` 改写成 `http` 的正则
+- `playUrlCandidates()` 产出的候选**必须全是 https**
+
+#### 🟠 存储无上限：断点续播历史（**已加 60 条上限**）
+
+`player.vue` 的 `native_play_history_v1` 是 **以播放地址为键** 的 map，从不清理。
+而抖音播放地址里带一次性签名 → **几乎永不命中、无限增长**，迟早把笔上 storage 撑爆
+（外部评价也点了这条）。已按 `at` 保留最近 **60** 条。
+
+#### 顺手修正的过时注释（代码没问题，注释在误导人）
+
+- `video.js:223` 写着"播放时优先挑可走明文 http 的直链，尽量不用中转" —— 与已删逻辑同源的错说法
+- `douyin-api.js:59` 那句警告提到的 `nativePlayableUrl` 已不存在
+
+#### 仍然无法解释的部分（如实记录）
+
+审查后**播放地址的选择逻辑已经干净了**，但**黑屏仍未复现**：
+PC 上 17/20 可播、探针 URL 在真机上确实能播、参数完全相同、编码容器相同。
+剩下只能是"设备到具体 CDN 主机的差异"，需要 §15.9 的 12/14/15 三行诊断来收口。
+
+**⚠️ 但对"分享页解析 / 导入视频"这条路径，本轮修的是一个确定的黑屏原因** ——
+它们以前拿到的是 403 明文 http 地址，现在会走正常的 https 跳板候选。
+
 
 

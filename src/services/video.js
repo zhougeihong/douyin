@@ -220,7 +220,10 @@ function normalizeVideo(item, index) {
     title: source.title || source.scene || '短片',
     url: source.url || source.link || source.video_url || '',
     playUrl: source.playUrl || '',
-    // 播放候选地址（含直链 CDN）：播放时优先挑可走明文 http 的直链，尽量不用中转
+    // 播放候选地址。
+    // ⚠️ 旧注释曾写"播放时优先挑可走明文 http 的直链，尽量不用中转" —— **那是错的，
+    //    已删**：① 直链 CDN 实测**恒 403**（HANDOFF §13.2）；② "模块没有 TLS" 的前提
+    //    已被真机诊断推翻（§13.7）。选地址统一交给 playUrlCandidates + 播放页 startWithFallback。
     playCandidates: Array.isArray(source.playCandidates) ? source.playCandidates : [],
     cover: relayAssetUrl(source.cover || ''),
     videoId: source.videoId || source.itemId || '',

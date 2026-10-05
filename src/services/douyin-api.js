@@ -55,8 +55,9 @@ export function extractVideoId(text) {
 //     能用的是同一数组里那个跳转入口：
 //       https://www.douyin.com/aweme/v1/play/?video_id=<play_addr.uri>&line=0&ratio=1080p&aid=6383
 //     它 302 到 CDN 后是 **200 video/mp4**（跟随跳转即可，实测 4 种参数写法都通）。
-//   · 所以本函数**不往 playCandidates 里塞 CDN 直链** —— 那样反而会让
-//     nativePlayableUrl 选中一个 403 的地址（它优先挑「直链 CDN」）。
+//   · 所以本函数**不往 playCandidates 里塞 CDN 直链** —— 塞了会被优先挑中，而它们是 403。
+//     （历史上 `nativePlayableUrl()` 正是"优先挑直链 CDN"的那个函数，**已删除**，见 §15.12。
+//      现在选地址只有一处：`playUrlCandidates()` + 播放页 `startWithFallback()`。）
 //
 // 备选接口（同样免签名，已实测）：
 //   `aweme/v1/web/aweme/detail/?aweme_id=<id>` → aweme_detail（单条视频详情）

@@ -83,6 +83,9 @@ const FULL = { rectX: 0, rectY: 0, rectW: 800, rectH: 254 };
 const WITHBAR = { rectX: 0, rectY: 0, rectW: 800, rectH: 190 };
 const RATES = [1, 1.25, 1.5, 2, 0.5];
 const HISTORY_KEY = 'native_play_history_v1';
+// 断点续播历史的上限：键是**播放地址**（带一次性签名，几乎不会命中），
+// 不设上限就会无限增长把 storage 撑爆。
+const HISTORY_MAX = 60;
 
 export default {
   name: 'Player',
@@ -339,6 +342,15 @@ export default {
         const raw = await jsapiStorageGet(HISTORY_KEY);
         const map = (typeof raw === 'string' ? JSON.parse(raw) : raw) || {};
         map[this.path] = { positionMs: this.positionMs, durationMs: this.durationMs, at: Date.now() };
+        // ★ 必须有上限：这个 map 的键是**播放地址**，每换一个视频就多一条，
+        //   而抖音的播放地址里带一次性签名 —— 等于**永不命中、无限增长**，
+        //   迟早把笔上的 storage 撑爆（外部评价也点了这一条）。
+        //   按 at 留最近的 N 条。
+        const keys = Object.keys(map);
+        if (keys.length > HISTORY_MAX) {
+          keys.sort((a, b) => ((map[a] && map[a].at) || 0) - ((map[b] && map[b].at) || 0));
+          keys.slice(0, keys.length - HISTORY_MAX).forEach((k) => { delete map[k]; });
+        }
         await jsapiStorageSet(HISTORY_KEY, map);
       } catch (error) { /* 存储不可用则跳过 */ }
     },

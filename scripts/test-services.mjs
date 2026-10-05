@@ -717,10 +717,27 @@ const playEntry = 'https://www.douyin.com/aweme/v1/play/?video_id=v0300fg10000da
 assert(np.needsRelay(playEntry) === true, 'needsRelay 认出 /aweme/v1/play 跳板入口');
 assert(np.needsRelay('https://v26-web.douyinvod.com/video/tos/cn/x.mp4') === false,
   'needsRelay 不误判直链 CDN');
+// ★ 回归防线：**不得再出现"把 https 改写成明文 http"的地址选择逻辑**。
+// 历史：`nativePlayableUrl()` 会 (1) 优先挑 play_addr 里的**直链 CDN**（实测恒 403），
+//       (2) 把结果 `replace(/^https:/i,'http:')` 换成明文 http（"模块没有 TLS"的旧前提，
+//       已被 §13.7 真机诊断推翻）→ 把好好的跳板入口换成打不开的地址。**已整体删除**。
+// 现在选地址只有一处：playUrlCandidates（多候选）+ 播放页 startWithFallback。
+assert(typeof np.nativePlayableUrl === 'undefined', '危险的 nativePlayableUrl 已删除');
+{
+  const npSrc = fs.readFileSync(path.join(root, 'src', 'services', 'native-player.js'), 'utf8');
+  const codeOnly = npSrc.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert(codeOnly.indexOf('isDirectCdn') < 0, 'native-player.js 不再有优先挑直链 CDN 的逻辑');
+  // 不得把 https 改写成 http（媒体地址一律保持 https：固件自带 TLS，§13.7）
+  assert(!/replace\(\s*\/\^https:/i.test(codeOnly),
+    'native-player.js 不得把 https 改写成 http（旧前提已被推翻）');
+  // 所有候选都必须是 https（明文 http 会被固件/中转链路搞坏）
+  const cands2 = np.playUrlCandidates(playEntry, []);
+  assert(cands2.every((u) => String(u).indexOf('https://') === 0),
+    'playUrlCandidates 产出的候选全是 https');
+}
 // 没配中转时：轮换候选的第一个应当是更稳的 snssdk 入口（不是原样的 douyin.com）
-const routed = np.nativePlayableUrl(playEntry, []);
-assert(routed.indexOf('aweme.snssdk.com/aweme/v1/play/') >= 0,
-  '未配中转时跳板入口 → 首选 snssdk 入口 = ' + String(routed).slice(0, 52));
+assert(np.playUrlCandidates(playEntry, [])[0].indexOf('aweme.snssdk.com/aweme/v1/play/') >= 0,
+  '跳板入口的首个候选是更稳的 snssdk 入口');
 assert(np.relayPlayableUrl(playEntry) === '', '未配中转时 relayPlayableUrl 返回空（调用方可据此跳过重试）');
 // 已是中转地址不重复套娃
 // relayPlayableUrl 不重复套中转

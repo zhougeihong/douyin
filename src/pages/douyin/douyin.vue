@@ -378,7 +378,7 @@ import { jsapiHttpRequest, previewPayload, storageSelfCheck } from '../../servic
 import { videoCapsText } from '../../services/video-caps.js';
 import { loadCookies, cookieSummary, hasLoginCookie, cookieCount, clearCookies, saveCookiesFromText, inspectRawForCookies } from '../../services/session-cookies.js';
 import { fetchItemInfo } from '../../services/douyin-api.js';
-import { available as nativeVideoAvailable, nativePlayableUrl, playUrlCandidates, badHostList, probeCandidatesViaRelay, relayPlayableUrl, play as nativePlay, stop as nativeStop } from '../../services/native-player.js';
+import { available as nativeVideoAvailable, playUrlCandidates, badHostList, probeCandidatesViaRelay, relayPlayableUrl, play as nativePlay, stop as nativeStop } from '../../services/native-player.js';
 import { setPendingPlay } from '../../services/play-request.js';
 import { API_RELAY, DOUYIN_HOT_FEED_API, APP_VERSION } from '../../config.js';
 
@@ -685,7 +685,15 @@ export default {
     // 打开原生横屏播放页（真播放靠随包的原生模块；没有模块时退回页内 HTML5 播放）
     async openNativePlayer(item) {
       if (!item || !item.playUrl) return;
-      const url = nativePlayableUrl(item.playUrl, item.playCandidates);
+      // ★ 这里**不再**用 nativePlayableUrl() 预先挑一个地址。
+      //   原因（真 bug）：那个函数会 (1) 优先挑 `play_addr.url_list` 里的**直链 CDN**
+      //   —— 而 HANDOFF §13.2 实测那些直链**恒 403**（douyin-api.js 里自己都写了这条警告）；
+      //   (2) 把 https **改写成明文 http** —— 那是"模块没有 TLS"的旧前提，
+      //   早已被真机诊断推翻（§13.7 `OK 1280x720`）。
+      //   两者叠加会把好好的跳板入口换成打不开的地址。
+      //   现在把**原始 playUrl + 候选**整体交给播放页，由它的 startWithFallback 按序试
+      //   （那才是 §13.5 验证过 22/22 的那条路）。**选地址的职责只留一处。**
+      const url = item.playUrl;
       const name = item.title || item.scene || '视频';
       setPendingPlay({ path: url, name: name, candidates: item.playCandidates || [] });
       try {
