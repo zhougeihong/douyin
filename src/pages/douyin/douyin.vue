@@ -389,7 +389,7 @@
         </div>
         <text class="log-btn-txt" v-else>跑诊断中…</text>
         <div class="log-btn" @click="copyLog">
-          <text class="log-btn-txt">复制</text>
+          <text class="log-btn-txt">{{ logCopied ? '已选' : '全选' }}</text>
         </div>
         <div class="log-btn" @click="clearLog">
           <text class="log-btn-txt">清空</text>
@@ -397,6 +397,15 @@
         <div class="log-btn log-btn-close" @click="toggleLog">
           <text class="log-btn-txt">关闭</text>
         </div>
+      </div>
+      <!--
+        为什么直接用 input 而不是 <text>：
+        ① 词典笔**没有系统剪贴板**，只有 input/textarea 里的文字能被系统"复制"拿走；
+        ② 需要把日志拷出来时，逐行截图抄太容易抄错（我自己就抄错过）。
+        所以日志同时**可选中**（点「全选」聚焦到输入框），再长按复制即可。
+      -->
+      <div class="log-raw" v-if="logCopied">
+        <input class="log-input" :value="logRawText" :focus="logCopied" />
       </div>
       <scroller class="log-body" show-scrollbar="false">
         <text class="log-line" v-for="(ln, i) in logLines" :key="'lg' + i"
@@ -484,7 +493,10 @@ export default {
       logBusy: false,
       netLog: [],              // 网络诊断的行（运行网络诊断时填）
       videoLog: [],            // 视频诊断的行
-      logClipboard: '',        // 「复制」放这里（词典笔无系统剪贴板）
+      logClipboard: '',        // 「全选」把日志放这里（词典笔无系统剪贴板）
+      logCopied: false,        // 是否已展开可复制的输入框
+      probeVideoOk: null,      // 诊断第 11 行结论（固定探针视频能不能播）
+      feedVideoState: '未测',   // 诊断第 12 行结论（feed 首条实播结果）
       cur: 0,
       dragY: 0,
       startY: 0,
@@ -553,6 +565,10 @@ export default {
     // 日志面板当前页签要显示的行
     logLines() {
       return this.logTab === 'video' ? this.videoLog : this.netLog;
+    },
+    // 「全选」输入框里的整份文本
+    logRawText() {
+      return this.logClipboard || this.logLines.map((l) => l.text).join('\n');
     },
     visibleList() {
       if (this.tab === 'live') return this.list.filter((item) => item.live);
@@ -1304,11 +1320,13 @@ export default {
           rate: 1,
           volume: 0
         });
+        this.probeVideoOk = !!(pr && pr.ok && pr.videoW && pr.videoH);
         steps.push('11 原生 https 直连播放: ' + (pr && pr.ok
           ? ('OK ' + (pr.videoW || '?') + 'x' + (pr.videoH || '?') + ' → 固件 FFmpeg 自带 TLS，无需中转')
           : ('失败 ' + ((pr && pr.error) || '未知'))));
         try { await nativeStop(); } catch (error) { /* 忽略 */ }
       } catch (error) {
+        this.probeVideoOk = false;
         steps.push('11 原生 https 直连播放: 异常 ' + ((error && error.message) || ''));
       }
 
@@ -1318,10 +1336,12 @@ export default {
       //     这一步把结论收敛成两种，之后不用再猜：
       //       · 这里也 OK  → 模块与网络都没问题，问题在"播放页的调度/参数"
       //       · 这里失败   → 问题在这些具体地址（再看下面 13/14 行的探测结果）
+      this.feedVideoState = '未测';
       try {
         const first = this.list[0];
         const firstUrl = first && first.playUrl;
         if (!firstUrl) {
+          this.feedVideoState = '首条无地址';
           steps.push('12 feed 首条实播: 首条还没有播放地址（等列表加载完再测）');
         } else {
           const cand = playUrlCandidates(firstUrl, []);
@@ -1335,14 +1355,17 @@ export default {
           });
           if (fr && fr.ok) {
             const hasSize = !!(fr.videoW && fr.videoH);
+            this.feedVideoState = hasSize ? ('能播 ' + fr.videoW + 'x' + fr.videoH) : '打开了但无视频流';
             steps.push('12 feed 首条实播: ok=' + fr.videoW + 'x' + fr.videoH
               + (hasSize ? ' → 能播' : ' → **打开了但无视频流**（就是黑屏的那种）'));
           } else {
+            this.feedVideoState = '失败 ' + ((fr && fr.error) || '未知');
             steps.push('12 feed 首条实播: 失败 ' + ((fr && fr.error) || '未知'));
           }
           try { await nativeStop(); } catch (error) { /* 忽略 */ }
         }
       } catch (error) {
+        this.feedVideoState = '异常 ' + ((error && error.message) || '');
         steps.push('12 feed 首条实播: 异常 ' + ((error && error.message) || ''));
       }
       // 12) 首条条目状态 + 上次解析结果：定位“解析成功但界面没反应”
@@ -1432,6 +1455,13 @@ export default {
       this.netDiagRunning = false;
       // 同步到左侧日志面板（网络页签），行级标注 ok/warn 便于一眼扫
       this.netLog = steps.map((t) => ({ text: t, level: levelOfLogLine(t) }));
+      // ★ 面板第一行放**一句话结论**：这一步就是为了让"设备侧到底卡在哪一层"一眼可读，
+      //   不用在几十行里找（也方便截图/复制时只需要一行）。
+      this.netLog.unshift({
+        text: '结论: 探针视频=' + (this.probeVideoOk ? '能播' : '不能播')
+          + ' · feed 视频=' + this.feedVideoState,
+        level: (this.probeVideoOk && /能播/.test(this.feedVideoState)) ? 'ok' : 'warn'
+      });
 
       // 诊断已证明通路可用，而视频页还停在离线样例 → 自动重载一次
       if (directOk && this.offlineFallback) this.reloadVideos();
@@ -1452,11 +1482,13 @@ export default {
       this.videoLog = [];
     },
     copyLog() {
-      // 词典笔没有系统剪贴板，放一份到本页内存 + 提示，便于贴到「我的 → 粘贴 Cookie」
+      // 词典笔没有系统剪贴板：把整份日志塞进一个 input，靠系统"全选/复制"取走。
+      // 第一次点：展开并聚焦；再点：收起。
       const text = this.logLines.map((l) => l.text).join('\n');
       if (!text) { this.showToast('没有可复制的日志'); return; }
       this.logClipboard = text;
-      this.showToast('日志已放入应用内剪贴板（' + this.logLines.length + ' 行），可在输入框里长按粘贴', 3000);
+      this.logCopied = !this.logCopied;
+      if (this.logCopied) this.showToast('已选中全部 ' + this.logLines.length + ' 行，长按可复制', 3000);
     },
     async runDiagnostics() {
       if (this.logBusy) return;
@@ -1989,6 +2021,21 @@ export default {
   padding-left: 8px;
   padding-right: 8px;
   padding-top: 4px;
+}
+/* 「全选」后出现的可复制输入框：词典笔没有系统剪贴板，只有输入框里的字能被系统复制走 */
+.log-raw {
+  padding-left: 8px;
+  padding-right: 8px;
+  padding-top: 4px;
+}
+.log-input {
+  height: 54px;
+  font-size: 9px;
+  color: #25f4ee;
+  background-color: #1c1c22;
+  border-radius: 4px;
+  padding-left: 5px;
+  padding-right: 5px;
 }
 .log-line {
   font-size: 9px;
